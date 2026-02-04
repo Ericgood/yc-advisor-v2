@@ -65,45 +65,23 @@ export async function POST(req: NextRequest) {
       { role: 'user' as const, content: message },
     ];
 
-    const stream = await anthropic.messages.stream({
+    const response = await anthropic.messages.create({
       model: 'claude-3-haiku-20240307',
       max_tokens: 4096,
       system: SYSTEM_PROMPT,
       messages,
     });
 
-    const encoder = new TextEncoder();
-    const readable = new ReadableStream({
-      async start(controller) {
-        try {
-          for await (const chunk of stream) {
-            if (chunk.type === 'content_block_delta') {
-              const delta = chunk.delta as {text?: string};
-              if (delta.text) {
-                const data = `data: ${JSON.stringify({ text: delta.text })}\n\n`;
-                controller.enqueue(encoder.encode(data));
-              }
-            }
-          }
-          controller.enqueue(encoder.encode('data: [DONE]\n\n'));
-          controller.close();
-        } catch (error) {
-          controller.error(error);
-        }
-      },
-    });
+    const content = response.content[0];
+    if (content.type === 'text') {
+      return NextResponse.json({ text: content.text });
+    }
 
-    return new Response(readable, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache',
-        Connection: 'keep-alive',
-      },
-    });
+    return NextResponse.json({ text: 'No response' });
   } catch (error) {
     console.error('Chat API error:', error);
     return NextResponse.json(
-      { error: 'Internal server error' },
+      { error: 'Internal server error', details: String(error) },
       { status: 500 }
     );
   }
