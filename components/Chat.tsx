@@ -1,7 +1,22 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Menu, X, Copy, RotateCcw, Trash2 } from 'lucide-react';
+import { 
+  Send, 
+  Bot, 
+  User, 
+  Menu, 
+  X, 
+  Copy, 
+  RotateCcw, 
+  Trash2,
+  Sparkles,
+  Lightbulb,
+  Users,
+  TrendingUp,
+  Briefcase,
+  Heart
+} from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 
@@ -14,11 +29,11 @@ interface Message {
 const TOPICS = [
   { id: 'idea', label: '💡 创业想法', prompt: '如何找到好的创业想法？' },
   { id: 'cofounder', label: '👥 联合创始人', prompt: '如何找到合适的联合创始人？' },
-  { id: 'funding', label: '💰 融资', prompt: '什么时候该融资？' },
-  { id: 'product', label: '🛠️ 产品', prompt: '如何实现产品市场匹配？' },
-  { id: 'growth', label: '📈 增长', prompt: '如何获取前1000个用户？' },
-  { id: 'hiring', label: '🎯 招聘', prompt: '早期招聘应该注意什么？' },
-  { id: 'mindset', label: '🧠 心态', prompt: '如何保持创业动力？' },
+  { id: 'funding', label: '💰 融资策略', prompt: '什么时候该融资？' },
+  { id: 'product', label: '🛠️ 产品开发', prompt: '如何实现产品市场匹配？' },
+  { id: 'growth', label: '📈 增长获客', prompt: '如何获取前1000个用户？' },
+  { id: 'hiring', label: '🎯 早期招聘', prompt: '早期招聘应该注意什么？' },
+  { id: 'mindset', label: '🧠 创业心态', prompt: '如何保持创业动力？' },
 ];
 
 export default function Chat() {
@@ -28,7 +43,10 @@ export default function Chat() {
       role: 'assistant',
       content: `你好！我是 **YC Advisor**，你的创业咨询助手。
 
-我基于 **Y Combinator** 的 443+ 个精选资源为你提供建议。
+我基于 **Y Combinator** 的 443+ 个精选资源为你提供建议，包括：
+- Paul Graham 的经典文章
+- YC 合伙人的最新观点
+- 成功创始人的实战经验
 
 你可以问我任何关于创业的问题，或者点击下方的话题开始！`,
     },
@@ -41,12 +59,10 @@ export default function Chat() {
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
-  // 自动滚动
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // 发送消息
   const sendMessage = async (text: string) => {
     if (!text.trim() || isLoading) return;
 
@@ -60,7 +76,6 @@ export default function Chat() {
     setInput('');
     setIsLoading(true);
 
-    // 重置输入框高度
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
     }
@@ -75,9 +90,7 @@ export default function Chat() {
         }),
       });
 
-      if (!response.ok) {
-        throw new Error('API Error');
-      }
+      if (!response.ok) throw new Error('API Error');
 
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
@@ -141,7 +154,6 @@ export default function Chat() {
     }
   };
 
-  // 调整文本框高度
   useEffect(() => {
     if (textareaRef.current) {
       textareaRef.current.style.height = 'auto';
@@ -149,7 +161,6 @@ export default function Chat() {
     }
   }, [input]);
 
-  // 复制
   const copyMessage = async (content: string, id: string) => {
     try {
       await navigator.clipboard.writeText(content);
@@ -160,7 +171,6 @@ export default function Chat() {
     }
   };
 
-  // 重新生成
   const regenerate = () => {
     const lastUser = [...messages].reverse().find(m => m.role === 'user');
     if (lastUser) {
@@ -169,7 +179,6 @@ export default function Chat() {
     }
   };
 
-  // 清空
   const clearChat = () => {
     if (confirm('确定清空对话？')) {
       setMessages([{
@@ -177,7 +186,10 @@ export default function Chat() {
         role: 'assistant',
         content: `你好！我是 **YC Advisor**，你的创业咨询助手。
 
-我基于 **Y Combinator** 的 443+ 个精选资源为你提供建议。
+我基于 **Y Combinator** 的 443+ 个精选资源为你提供建议，包括：
+- Paul Graham 的经典文章
+- YC 合伙人的最新观点
+- 成功创始人的实战经验
 
 你可以问我任何关于创业的问题，或者点击下方的话题开始！`,
       }]);
@@ -211,7 +223,7 @@ export default function Chat() {
 
         {/* 话题 */}
         <div className="flex-1 overflow-y-auto p-4">
-          <p className="text-xs font-semibold text-gray-400 uppercase mb-3">话题分类</p>
+          <p className="text-xs font-semibold text-gray-400 uppercase mb-3">热门话题</p>
           <div className="space-y-1">
             {TOPICS.map(topic => (
               <button
@@ -220,7 +232,7 @@ export default function Chat() {
                   sendMessage(topic.prompt);
                   setSidebarOpen(false);
                 }}
-                className="w-full text-left px-3 py-2 text-sm text-gray-700 hover:bg-orange-100 hover:text-orange-700 rounded-lg transition-colors"
+                className="w-full text-left px-3 py-2.5 text-sm text-gray-700 hover:bg-orange-100 hover:text-orange-700 rounded-lg transition-colors"
               >
                 {topic.label}
               </button>
@@ -243,7 +255,7 @@ export default function Chat() {
       {/* 主区域 */}
       <main className="flex-1 flex flex-col min-w-0">
         {/* 头部 */}
-        <header className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white">
+        <header className="flex items-center justify-between px-4 py-3 border-b border-gray-200 bg-white sticky top-0 z-20">
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="lg:hidden p-2 hover:bg-gray-100 rounded-lg"
@@ -255,22 +267,38 @@ export default function Chat() {
         </header>
 
         {/* 消息 */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4 space-y-6">
           {messages.map((msg, idx) => (
             <div key={msg.id} className={`flex gap-3 ${msg.role === 'user' ? 'flex-row-reverse' : ''}`}>
               {/* 头像 */}
-              <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${msg.role === 'user' ? 'bg-gray-200' : 'bg-orange-500'}`}>
-                {msg.role === 'user' ? <User size={16} className="text-gray-600" /> : <Bot size={16} className="text-white" />}
+              <div className={`w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 ${msg.role === 'user' ? 'bg-orange-100' : 'bg-orange-500'}`}>
+                {msg.role === 'user' ? <User size={16} className="text-orange-600" /> : <Bot size={16} className="text-white" />}
               </div>
 
               {/* 内容 */}
               <div className="flex-1 max-w-3xl">
-                <div className={`rounded-2xl px-4 py-3 ${msg.role === 'user' ? 'bg-orange-500 text-white ml-auto' : 'bg-gray-100 text-gray-800'}`}>
+                <div className={`rounded-2xl px-4 py-3 ${msg.role === 'user' ? 'bg-orange-500 text-white ml-auto' : 'bg-gray-50 border border-gray-200'}`}>
                   {msg.role === 'user' ? (
-                    <p className="whitespace-pre-wrap">{msg.content}</p>
+                    <p className="whitespace-pre-wrap text-white">{msg.content}</p>
                   ) : (
-                    <div className="prose prose-sm max-w-none prose-headings:text-gray-800 prose-p:text-gray-700 prose-strong:text-gray-900 prose-code:text-orange-600 prose-pre:bg-gray-800 prose-pre:text-gray-100">
-                      <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    <div className="prose prose-sm max-w-none text-gray-800">
+                      <ReactMarkdown 
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          h1: ({children}) => <h1 className="text-xl font-bold text-gray-900 mt-4 mb-2">{children}</h1>,
+                          h2: ({children}) => <h2 className="text-lg font-semibold text-gray-800 mt-3 mb-2">{children}</h2>,
+                          h3: ({children}) => <h3 className="text-base font-medium text-gray-800 mt-2 mb-1">{children}</h3>,
+                          strong: ({children}) => <strong className="font-semibold text-gray-900">{children}</strong>,
+                          code: ({children}) => <code className="bg-gray-200 px-1 py-0.5 rounded text-sm text-orange-700">{children}</code>,
+                          pre: ({children}) => <pre className="bg-gray-800 text-gray-100 p-3 rounded-lg overflow-x-auto my-2 text-sm">{children}</pre>,
+                          ul: ({children}) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
+                          ol: ({children}) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
+                          li: ({children}) => <li className="text-gray-700">{children}</li>,
+                          p: ({children}) => <p className="mb-2 text-gray-700 leading-relaxed">{children}</p>,
+                          blockquote: ({children}) => <blockquote className="border-l-4 border-orange-300 pl-4 italic text-gray-600 my-2">{children}</blockquote>,
+                          a: ({href, children}) => <a href={href} className="text-orange-600 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>,
+                        }}
+                      >
                         {msg.content}
                       </ReactMarkdown>
                     </div>
@@ -287,7 +315,7 @@ export default function Chat() {
                       <Copy size={12} />
                       {copiedId === msg.id ? '已复制' : '复制'}
                     </button>
-                    {idx === messages.length - 1 && (
+                    {idx === messages.length - 1 && !isLoading && (
                       <button
                         onClick={regenerate}
                         className="flex items-center gap-1 px-2 py-1 text-xs text-gray-500 hover:text-gray-700"
@@ -308,7 +336,7 @@ export default function Chat() {
               <div className="w-8 h-8 rounded-full bg-orange-500 flex items-center justify-center">
                 <Bot size={16} className="text-white" />
               </div>
-              <div className="bg-gray-100 rounded-2xl px-4 py-3">
+              <div className="bg-gray-50 border border-gray-200 rounded-2xl px-4 py-3">
                 <div className="flex gap-1">
                   <span className="w-2 h-2 bg-orange-500 rounded-full animate-bounce" />
                   <span className="w-2 h-2 bg-orange-500 rounded-full animate-bounce" style={{ animationDelay: '0.1s' }} />
@@ -323,7 +351,7 @@ export default function Chat() {
         {/* 输入 */}
         <div className="border-t border-gray-200 p-4 bg-white">
           <form onSubmit={handleSubmit} className="max-w-4xl mx-auto">
-            <div className="flex items-end gap-2 bg-gray-100 rounded-xl p-2 border border-gray-200 focus-within:border-orange-300 focus-within:ring-2 focus-within:ring-orange-100">
+            <div className="flex items-end gap-2 bg-gray-100 rounded-xl p-2 border border-gray-200 focus-within:border-orange-300 focus-within:ring-2 focus-within:ring-orange-100 transition-all">
               <textarea
                 ref={textareaRef}
                 value={input}
