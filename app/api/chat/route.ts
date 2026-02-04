@@ -46,8 +46,8 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const messages = [
-      ...history.map((h: any) => ({
+    const messages: Anthropic.MessageParam[] = [
+      ...history.map((h: {role: string; content: string}) => ({
         role: h.role as 'user' | 'assistant',
         content: h.content,
       })),
@@ -67,9 +67,12 @@ export async function POST(req: NextRequest) {
       async start(controller) {
         try {
           for await (const chunk of stream) {
-            if (chunk.type === 'content_block_delta' && chunk.delta.text) {
-              const data = `data: ${JSON.stringify({ text: chunk.delta.text })}\n\n`;
-              controller.enqueue(encoder.encode(data));
+            if (chunk.type === 'content_block_delta') {
+              const delta = chunk.delta as {text?: string};
+              if (delta.text) {
+                const data = `data: ${JSON.stringify({ text: delta.text })}\n\n`;
+                controller.enqueue(encoder.encode(data));
+              }
             }
           }
           controller.enqueue(encoder.encode('data: [DONE]\n\n'));

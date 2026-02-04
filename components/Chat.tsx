@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useRef, useEffect } from 'react';
-import { Send, Bot, User, Sparkles, BookOpen, Lightbulb, Users, TrendingUp, Briefcase, Heart, Menu, X } from 'lucide-react';
+import { Send, Bot, User, Sparkles, Lightbulb, Users, TrendingUp, Briefcase, Heart, Menu, X } from 'lucide-react';
 
 interface Message {
   role: 'user' | 'assistant';
@@ -110,13 +110,13 @@ export default function Chat() {
                   return newMessages;
                 });
               }
-            } catch (e) {
+            } catch {
               // Ignore parse errors
             }
           }
         }
       }
-    } catch (error) {
+    } catch {
       setMessages((prev) => [
         ...prev,
         {
