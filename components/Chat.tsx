@@ -9,13 +9,7 @@ import {
   X, 
   Copy, 
   RotateCcw, 
-  Trash2,
-  Sparkles,
-  Lightbulb,
-  Users,
-  TrendingUp,
-  Briefcase,
-  Heart
+  Trash2
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
