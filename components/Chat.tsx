@@ -227,7 +227,7 @@ export default function Chat() {
         </header>
 
         {/* Messages */}
-        <div className="flex-1 overflow-y-auto p-4 space-y-4">
+        <div className="flex-1 overflow-y-auto p-4 space-y-4" style={{ maxHeight: 'calc(100vh - 140px)' }}>
           {messages.map((message, index) => (
             <div
               key={index}
@@ -249,18 +249,19 @@ export default function Chat() {
                 )}
               </div>
               <div
-                className={`max-w-[85%] lg:max-w-[75%] rounded-2xl px-4 py-3 ${
+                className={`max-w-[85%] lg:max-w-[75%] rounded-2xl px-4 py-3 overflow-hidden ${
                   message.role === 'user'
                     ? 'bg-orange-500 text-white'
                     : 'bg-white border border-gray-200 shadow-sm'
                 }`}
               >
                 <div
-                  className={`prose prose-sm max-w-none ${
+                  className={`prose prose-sm max-w-none break-words ${
                     message.role === 'user'
                       ? 'prose-invert'
                       : ''
                   }`}
+                  style={{ wordBreak: 'break-word', overflowWrap: 'break-word' }}
                   dangerouslySetInnerHTML={{
                     __html: message.content
                       .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
