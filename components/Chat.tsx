@@ -520,7 +520,7 @@ export default function Chat() {
                   {message.role === 'user' ? (
                     <p className="whitespace-pre-wrap">{message.content}</p>
                   ) : (
-                    <div className={`prose prose-sm max-w-none ${message.role === 'user' ? 'prose-invert' : ''}`}>
+                    <div className="prose prose-sm max-w-none">
                       <ReactMarkdown remarkPlugins={[remarkGfm]}>
                         {message.content}
                       </ReactMarkdown>
