@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { 
   Send, 
   Bot, 
@@ -14,6 +14,7 @@ import {
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { ErrorBoundary } from './ErrorBoundary';
+import type { Message, Topic } from '@/lib/types';
 
 // 在组件外部定义 Markdown 组件配置，避免每次渲染重复创建
 const markdownComponents = {
@@ -57,13 +58,7 @@ const markdownComponents = {
 
 const remarkPlugins = [remarkGfm];
 
-interface Message {
-  id: string;
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-const TOPICS = [
+const TOPICS: Topic[] = [
   { id: 'idea', label: '💡 创业想法', prompt: '如何找到好的创业想法？' },
   { id: 'cofounder', label: '👥 联合创始人', prompt: '如何找到合适的联合创始人？' },
   { id: 'funding', label: '💰 融资策略', prompt: '什么时候该融资？' },
@@ -87,6 +82,17 @@ const WELCOME_MESSAGE: Message = {
 你可以问我任何关于创业的问题，或者点击下方的话题开始！`,
 };
 
+// 错误处理辅助函数
+const handleChatError = (error: unknown): string => {
+  if (error instanceof Error) {
+    if (error.name === 'AbortError') {
+      return '请求超时，请稍后重试';
+    }
+    return error.message;
+  }
+  return '发生未知错误';
+};
+
 export default function Chat() {
   const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
   const [input, setInput] = useState('');
@@ -101,7 +107,7 @@ export default function Chat() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  const sendMessage = async (text: string) => {
+  const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || isLoading) return;
 
     const userMsg: Message = {
@@ -119,6 +125,9 @@ export default function Chat() {
     }
 
     try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -126,9 +135,15 @@ export default function Chat() {
           message: text,
           history: messages.slice(-6).map(m => ({ role: m.role, content: m.content })),
         }),
+        signal: controller.signal,
       });
 
-      if (!response.ok) throw new Error('API Error');
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `请求失败: ${response.status}`);
+      }
 
       const data = await response.json();
       
@@ -144,15 +159,16 @@ export default function Chat() {
       setMessages(prev => [...prev, assistantMsg]);
     } catch (err) {
       console.error('Chat error:', err);
+      const errorMessage = handleChatError(err);
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         role: 'assistant',
-        content: '抱歉，出现了错误。请稍后重试。',
+        content: `抱歉，${errorMessage}。请稍后重试。`,
       }]);
     } finally {
       setIsLoading(false);
     }
-  };
+  }, [isLoading, messages]);
 
   const handleSubmit = (e?: React.FormEvent) => {
     e?.preventDefault();
@@ -183,7 +199,7 @@ export default function Chat() {
     }
   };
 
-  const regenerate = () => {
+  const regenerate = useCallback(() => {
     // 找到最后一条用户消息的索引
     const lastUserIndex = messages.length - 1 - [...messages].reverse().findIndex(m => m.role === 'user');
     if (lastUserIndex >= 0) {
@@ -192,13 +208,13 @@ export default function Chat() {
       setMessages(prev => prev.slice(0, lastUserIndex + 1));
       sendMessage(lastUser.content);
     }
-  };
+  }, [messages, sendMessage]);
 
-  const clearChat = () => {
+  const clearChat = useCallback(() => {
     if (confirm('确定清空对话？')) {
       setMessages([WELCOME_MESSAGE]);
     }
-  };
+  }, []);
 
   return (
     <div className="flex h-screen bg-white">

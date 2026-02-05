@@ -1,25 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { YC_KNOWLEDGE_BASE } from '@/lib/yc-knowledge';
 import { checkRateLimit } from '@/lib/rate-limit';
+import { 
+  ChatMessage, 
+  ChatRequest, 
+  ValidationResult, 
+  ChatResponse,
+  AppError,
+  ErrorCode,
+  successResponse,
+  errorResponse 
+} from '@/lib/types';
 
-// 请求验证
-interface ChatMessage {
-  role: 'user' | 'assistant';
-  content: string;
-}
-
-interface ChatRequest {
-  message: string;
-  history?: ChatMessage[];
-}
-
-interface ValidationResult {
-  valid: boolean;
-  error?: string;
-  data?: { message: string; history: ChatMessage[] };
-}
-
-function validateChatRequest(body: unknown): ValidationResult {
+function validateChatRequest(body: unknown): ValidationResult<{ message: string; history: ChatMessage[] }> {
   if (!body || typeof body !== 'object') {
     return { valid: false, error: '请求体无效' };
   }
@@ -70,7 +63,7 @@ function validateChatRequest(body: unknown): ValidationResult {
         return { valid: false, error: 'history 消息过长' };
       }
 
-      validatedHistory.push({ role, content });
+      validatedHistory.push({ role: role as 'user' | 'assistant', content });
     }
   }
 
@@ -130,7 +123,7 @@ export async function POST(req: NextRequest) {
 
     if (!rateLimitResult.allowed) {
       return NextResponse.json(
-        { error: '请求过于频繁，请稍后重试' },
+        errorResponse('请求过于频繁，请稍后重试'),
         {
           status: 429,
           headers: {
@@ -147,7 +140,7 @@ export async function POST(req: NextRequest) {
     const validation = validateChatRequest(body);
     if (!validation.valid || !validation.data) {
       return NextResponse.json(
-        { error: validation.error || '请求参数无效' },
+        errorResponse(validation.error || '请求参数无效'),
         { status: 400 }
       );
     }

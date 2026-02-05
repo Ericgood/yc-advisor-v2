@@ -1,10 +1,7 @@
 // 简单的内存 Rate Limiting 实现
 // 注意：在多实例部署时需要使用 Redis 等外部存储
 
-interface RateLimitRecord {
-  count: number;
-  resetTime: number;
-}
+import type { RateLimitRecord, RateLimitResult } from './types';
 
 const rateLimit = new Map<string, RateLimitRecord>();
 
@@ -32,11 +29,7 @@ function cleanupExpiredRecords() {
   }
 }
 
-export interface RateLimitResult {
-  allowed: boolean;
-  retryAfter?: number;
-  remaining?: number;
-}
+export { type RateLimitResult };
 
 export function checkRateLimit(ip: string): RateLimitResult {
   cleanupExpiredRecords();
