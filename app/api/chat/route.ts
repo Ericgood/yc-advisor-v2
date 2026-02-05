@@ -23,25 +23,157 @@ const CONFIG = {
   defaultLimit: 10,
   maxLimit: 50,
   defaultSearchTimeout: 5000,
+  // OpenRouter timeout - must be less than Vercel serverless timeout
+  openRouterTimeout: 10000, // 10 seconds
+  // Knowledge base initialization timeout
+  kbInitTimeout: 5000, // 5 seconds
+  // Max retries for OpenRouter
+  maxRetries: 2,
 };
 
 // ============================================================================
-// Knowledge Base Singleton
+// Knowledge Base Singleton with Initialization Tracking
 // ============================================================================
 
 let kbInstance: KnowledgeBase | null = null;
+let kbInitializing: Promise<KnowledgeBase> | null = null;
 
 async function getKB(): Promise<KnowledgeBase> {
-  if (!kbInstance) {
-    kbInstance = getKnowledgeBase({
-      indexPath: process.env.KNOWLEDGE_INDEX_PATH || 'data/knowledge-index.json',
-      contentPath: process.env.KNOWLEDGE_CONTENT_PATH || 'references',
-      cacheSize: 100,
-      cacheTtl: 5 * 60 * 1000, // 5 minutes
-    });
-    await kbInstance.initialize();
+  // Return existing instance
+  if (kbInstance) {
+    return kbInstance;
   }
-  return kbInstance;
+
+  // Return existing initialization promise to prevent duplicate initialization
+  if (kbInitializing) {
+    return kbInitializing;
+  }
+
+  // Create new initialization promise
+  kbInitializing = (async () => {
+    try {
+      kbInstance = getKnowledgeBase({
+        indexPath: process.env.KNOWLEDGE_INDEX_PATH || 'data/knowledge-index.json',
+        contentPath: process.env.KNOWLEDGE_CONTENT_PATH || 'references',
+        cacheSize: 100,
+        cacheTtl: 5 * 60 * 1000, // 5 minutes
+      });
+
+      // Initialize with timeout
+      const initPromise = kbInstance.initialize();
+      const timeoutPromise = new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error('Knowledge base initialization timeout')), CONFIG.kbInitTimeout)
+      );
+
+      await Promise.race([initPromise, timeoutPromise]);
+      console.log('[getKB] Knowledge base initialized successfully');
+      return kbInstance;
+    } catch (error) {
+      console.error('[getKB] Failed to initialize knowledge base:', error);
+      // Reset for retry
+      kbInstance = null;
+      throw error;
+    } finally {
+      kbInitializing = null;
+    }
+  })();
+
+  return kbInitializing;
+}
+
+// ============================================================================
+// OpenRouter API Call with Timeout and Retry
+// ============================================================================
+
+async function callOpenRouterWithRetry(
+  apiKey: string,
+  messages: { role: 'system' | 'user'; content: string }[],
+  retries = CONFIG.maxRetries
+): Promise<{ content: string; fromCache?: boolean }> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt <= retries; attempt++) {
+    try {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), CONFIG.openRouterTimeout);
+
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.APP_URL || 'https://yc-advisor-v2.vercel.app',
+          'X-Title': 'YC Advisor',
+        },
+        body: JSON.stringify({
+          model: 'anthropic/claude-3.5-sonnet',
+          messages,
+          max_tokens: 2048, // Reduced from 4096 to speed up response
+          temperature: 0.7,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const errorText = await response.text();
+        console.error(`[OpenRouter] Attempt ${attempt + 1} failed:`, response.status, errorText);
+        
+        // If rate limited, don't retry immediately
+        if (response.status === 429) {
+          throw new Error('Rate limited by OpenRouter');
+        }
+        
+        throw new Error(`OpenRouter API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+
+      if (!content) {
+        throw new Error('Empty response from OpenRouter');
+      }
+
+      return { content };
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      
+      // Don't retry on abort/timeout after all retries exhausted
+      if (attempt < retries) {
+        console.log(`[OpenRouter] Retrying... (${attempt + 1}/${retries})`);
+        // Exponential backoff: 500ms, 1000ms
+        await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+      }
+    }
+  }
+
+  throw lastError || new Error('OpenRouter API failed after retries');
+}
+
+// ============================================================================
+// Fallback Response Generator
+// ============================================================================
+
+function generateFallbackResponse(query: string, resources: { meta: ResourceMeta; content: string | null }[]): string {
+  const relevantResources = resources.filter(r => r.content).slice(0, 3);
+  
+  if (relevantResources.length === 0) {
+    return `抱歉，我暂时无法连接到 AI 服务。不过我可以建议你查看 YC 的官方资源库来获取关于"${query}"的信息。`;
+  }
+
+  let response = `抱歉，AI 服务暂时响应较慢。基于知识库，我为你找到了以下相关资源：\n\n`;
+  
+  relevantResources.forEach((r, i) => {
+    response += `${i + 1}. **${r.meta.title}** - ${r.meta.author}\n`;
+    if (r.content) {
+      const summary = r.content.slice(0, 300).replace(/[#*_]/g, '').trim();
+      response += `   ${summary}...\n\n`;
+    }
+  });
+
+  response += `\n你可以点击参考资料链接查看完整内容。`;
+  return response;
 }
 
 // ============================================================================
@@ -76,8 +208,17 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
     const limit = Math.min(params.limit || CONFIG.defaultLimit, CONFIG.maxLimit);
     const offset = params.offset || 0;
     
-    // Get knowledge base
-    const kb = await getKB();
+    // Get knowledge base with timeout
+    let kb: KnowledgeBase;
+    try {
+      kb = await getKB();
+    } catch (kbError) {
+      console.error('[GET] Knowledge base initialization failed:', kbError);
+      return NextResponse.json(
+        { error: 'Service temporarily unavailable', code: 'SERVICE_UNAVAILABLE' },
+        { status: 503 }
+      );
+    }
     
     // Build search query
     const searchQuery: SearchQuery = {
@@ -94,8 +235,13 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
       offset,
     };
     
-    // Execute search
-    const result = await kb.search(searchQuery);
+    // Execute search with timeout
+    const searchPromise = kb.search(searchQuery);
+    const timeoutPromise = new Promise<never>((_, reject) => 
+      setTimeout(() => reject(new Error('Search timeout')), CONFIG.defaultSearchTimeout)
+    );
+    
+    const result = await Promise.race([searchPromise, timeoutPromise]);
     
     // Build response
     const response: ApiSearchResponse = {
@@ -118,6 +264,8 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
  * Main chat endpoint with context retrieval
  */
 export async function POST(request: NextRequest): Promise<NextResponse> {
+  const startTime = Date.now();
+  
   try {
     const body = await request.json();
     const { message, options = {} } = body;
@@ -125,29 +273,64 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     if (!message || typeof message !== 'string') {
       throw new InvalidQueryError('Message is required');
     }
+
+    // Validate API key early
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey || apiKey.length < 20) {
+      console.error('OPENROUTER_API_KEY not configured or invalid');
+      return NextResponse.json(
+        { error: 'Service configuration error', code: 'CONFIG_ERROR' },
+        { status: 500 }
+      );
+    }
     
-    // Get knowledge base
-    const kb = await getKB();
+    // Get knowledge base with error handling
+    let kb: KnowledgeBase;
+    try {
+      kb = await getKB();
+    } catch (kbError) {
+      console.error('[POST] Knowledge base initialization failed:', kbError);
+      // Return fallback response without knowledge base
+      return NextResponse.json({
+        text: `抱歉，知识库服务暂时不可用。请稍后重试。`,
+        resources: [],
+        totalFound: 0,
+        fallback: true,
+      });
+    }
     
     // Extract search intent from message
     const searchQuery = extractSearchIntent(message);
     
-    // Search for relevant resources
-    const searchResult = await kb.search({
-      keywords: searchQuery.keywords || [],
-      rawQuery: message,
-      filters: searchQuery.filters || {},
-      limit: options.limit || 5,
-    });
+    // Search for relevant resources with timeout protection
+    let searchResult;
+    try {
+      searchPromise = kb.search({
+        keywords: searchQuery.keywords || [],
+        rawQuery: message,
+        filters: searchQuery.filters || {},
+        limit: options.limit || 5,
+      });
+      
+      const searchTimeoutPromise = new Promise<never>((_, reject) => 
+        setTimeout(() => reject(new Error('Search timeout')), CONFIG.defaultSearchTimeout)
+      );
+      
+      searchResult = await Promise.race([searchPromise, searchTimeoutPromise]);
+    } catch (searchError) {
+      console.error('[POST] Search failed:', searchError);
+      // Continue with empty results
+      searchResult = { resources: [], total: 0, facets: {} };
+    }
     
-    // Load top resources for context
+    // Load top resources for context (limited to 2 for speed)
     const resourcesWithContent = await Promise.all(
-      searchResult.resources.slice(0, 3).map(async (meta) => {
+      searchResult.resources.slice(0, 2).map(async (meta) => {
         try {
           const resource = await kb.loadResource(meta.code);
           return {
             meta,
-            content: truncateContent(resource.content, 2000),
+            content: truncateContent(resource.content, 1500), // Reduced from 2000
           };
         } catch {
           return { meta, content: null };
@@ -158,16 +341,6 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // Build context for LLM
     const contextString = buildContext(resourcesWithContent, message);
     
-    // Call OpenRouter to generate response
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey || apiKey.length < 20) {
-      console.error('OPENROUTER_API_KEY not configured or invalid');
-      return NextResponse.json(
-        { error: 'Service configuration error' },
-        { status: 500 }
-      );
-    }
-
     // Build citations from resources
     const citations = resourcesWithContent
       .filter(r => r.content)
@@ -179,104 +352,53 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 ## 你的背景
 - 你在 Y Combinator 工作了多年，看过数千家创业公司
 - 你熟悉 Paul Graham、Sam Altman、Dalton Caldwell 等 YC 合伙人的理念
-- 你参与过 Airbnb、Stripe、Dropbox、Reddit、Coinbase 等公司的早期孵化
 
 ## 回答风格
 - **直接、实用、不废话**：YC 风格就是直截了当
-- **具体可操作**：给出明确的下一步行动，不是泛泛而谈
-- **诚实务实**：如果某个想法不好，直接说；如果有风险，提醒清楚
-- **用创始人听得懂的语言**：避免过于学术化的表达
-
-## 核心原则（YC 圣经）
-1. **"做出人们想要的东西"** - 这是唯一重要的东西
-2. **"做不规模化的事情"** - 早期一个一个找用户
-3. **"快速迭代"** - 每周都发布新版本
-4. **"保持精简"** - 小而快的团队胜过庞大的团队
-5. **"生存下来"** - 创业公司的首要目标是活下去
+- **具体可操作**：给出明确的下一步行动
+- **诚实务实**：如果某个想法不好，直接说
 
 ## 引用规范（必须遵守）
 - **每个观点都要标注来源**：使用 "[作者名 - 文章标题]" 格式
-- **示例**："根据 Paul Graham 在《How to Get Startup Ideas》中的观点..."
-- **示例**："Sam Altman 在《How to Raise Money》中提到..."
-- **示例**："YC 合伙人 Dalton Caldwell 认为..."
-- 提及具体的 YC 公司案例（如 "Airbnb 早期..."、"Stripe 的做法是..."）
-- 如果建议来自某篇特定的 YC 文章，必须提及标题
-- **最后列出参考来源**：使用 "## 参考资料" 标题列出所有引用的资源
-
-## 你可以帮助的话题
-- 创业想法验证和选择
-- 联合创始人关系和股权分配
-- 产品开发和 MVP
-- 融资策略和投资人沟通
-- 增长策略（从 0 到 1000 用户）
-- 招聘前 10 个员工
-- 创业心态和压力管理
-- AI 时代的创业机会
+- **最后列出参考来源**：使用 "## 参考资料" 标题
 
 ## YC 知识库参考
-以下是与用户问题相关的 YC 资源内容，请基于这些资料回答。注意每个观点都要标注来源：
-
 ${contextString}
 
 ## 本次回答可用的参考资料
 ${citations}
 
-记住：
-1. **每个观点都要标注来源** - 使用 [作者 - 标题] 格式
-2. 你的目标是帮助创始人做出更好的决策，而不是替他们做决定
-3. 最后列出 "## 参考资料" 部分
-4. 提供建议、分享经验、指出风险，但最终决定权在他们
-`;
+记住：每个观点都要标注来源，最后列出参考资料。`;
 
     const messages = [
       { role: 'system' as const, content: SYSTEM_PROMPT },
       { role: 'user' as const, content: message },
     ];
 
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000);
-
+    // Call OpenRouter with retry and timeout
+    let responseContent: string;
+    let usedFallback = false;
+    
     try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': process.env.APP_URL || 'https://yc-advisor-v2.vercel.app',
-          'X-Title': 'YC Advisor',
-        },
-        body: JSON.stringify({
-          model: 'anthropic/claude-3.5-sonnet',
-          messages,
-          max_tokens: 4096,
-        }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const error = await response.text();
-        console.error('OpenRouter error:', error);
-        throw new Error(`OpenRouter API error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const content = data.choices?.[0]?.message?.content;
-
-      if (!content) {
-        return NextResponse.json({ text: '抱歉，没有收到回复。' });
-      }
-
-      return NextResponse.json({
-        text: content,
-        resources: searchResult.resources.map(r => ({ code: r.code, title: r.title, author: r.author })),
-        totalFound: searchResult.total,
-      });
-    } catch (fetchError) {
-      clearTimeout(timeoutId);
-      throw fetchError;
+      const result = await callOpenRouterWithRetry(apiKey, messages);
+      responseContent = result.content;
+    } catch (openRouterError) {
+      console.error('[POST] OpenRouter failed:', openRouterError);
+      // Generate fallback response
+      responseContent = generateFallbackResponse(message, resourcesWithContent);
+      usedFallback = true;
     }
+
+    const executionTime = Date.now() - startTime;
+    console.log(`[POST] Request completed in ${executionTime}ms, fallback=${usedFallback}`);
+
+    return NextResponse.json({
+      text: responseContent,
+      resources: searchResult.resources.map(r => ({ code: r.code, title: r.title, author: r.author })),
+      totalFound: searchResult.total,
+      executionTimeMs: executionTime,
+      fallback: usedFallback,
+    });
     
   } catch (error) {
     return handleError(error);
@@ -412,6 +534,16 @@ function handleError(error: unknown): NextResponse {
       { error: error.message, code: error.code },
       { status: 404 }
     );
+  }
+
+  // Check for timeout errors
+  if (error instanceof Error) {
+    if (error.message.includes('timeout') || error.name === 'AbortError') {
+      return NextResponse.json(
+        { error: 'Request timeout, please try again', code: 'TIMEOUT' },
+        { status: 504 }
+      );
+    }
   }
   
   return NextResponse.json(

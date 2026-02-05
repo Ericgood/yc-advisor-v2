@@ -126,7 +126,8 @@ export default function Chat() {
 
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
+      // Reduced timeout to match backend - 15 seconds
+      const timeoutId = setTimeout(() => controller.abort(), 15000);
 
       const response = await fetch('/api/chat', {
         method: 'POST',
