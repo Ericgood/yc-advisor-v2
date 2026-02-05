@@ -250,6 +250,8 @@ export class KnowledgeBase {
   async initialize(): Promise<void> {
     if (this.initialized) return;
     
+    const initStartTime = Date.now();
+    
     try {
       // In Node.js environment, try fs first, fallback to fetch
       if (typeof window === 'undefined') {
@@ -267,16 +269,20 @@ export class KnowledgeBase {
           // Vercel serverless specific paths
           path.resolve(process.cwd(), 'data/knowledge-index.json'),
           path.join(process.cwd(), 'data/knowledge-index.json'),
+          // Additional Vercel paths
+          path.join(process.cwd(), 'public/data/knowledge-index.json'),
+          '/var/task/data/knowledge-index.json',
         ].filter(Boolean) as string[];
         
         let data: string | null = null;
+        let loadedPath: string | null = null;
         
         for (const indexPath of possiblePaths) {
           try {
             // Check if file exists first
             await fs.access(indexPath);
             data = await fs.readFile(indexPath, 'utf-8');
-            console.log(`[KnowledgeBase] Loaded index from: ${indexPath}`);
+            loadedPath = indexPath;
             break;
           } catch {
             continue;
@@ -285,15 +291,29 @@ export class KnowledgeBase {
         
         if (data) {
           this.index = JSON.parse(data) as KnowledgeIndex;
+          const initTime = Date.now() - initStartTime;
+          console.log(`[KnowledgeBase] Loaded index from: ${loadedPath} (${initTime}ms, ${Object.keys(this.index.resources).length} resources)`);
         } else {
           // Fallback to fetch API if fs fails (e.g., in some serverless environments)
           console.log('[KnowledgeBase] Falling back to fetch API for index');
           const indexUrl = process.env.KNOWLEDGE_INDEX_URL || '/data/knowledge-index.json';
-          const response = await fetch(indexUrl);
-          if (!response.ok) {
-            throw new Error(`Failed to fetch index from ${indexUrl}: ${response.status}`);
+          
+          // Add timeout for fetch fallback
+          const fetchController = new AbortController();
+          const fetchTimeout = setTimeout(() => fetchController.abort(), 3000);
+          
+          try {
+            const response = await fetch(indexUrl, { signal: fetchController.signal });
+            clearTimeout(fetchTimeout);
+            
+            if (!response.ok) {
+              throw new Error(`Failed to fetch index from ${indexUrl}: ${response.status}`);
+            }
+            this.index = await response.json() as KnowledgeIndex;
+          } catch (fetchError) {
+            clearTimeout(fetchTimeout);
+            throw fetchError;
           }
-          this.index = await response.json() as KnowledgeIndex;
         }
       } else {
         // In browser, fetch the index
@@ -303,7 +323,8 @@ export class KnowledgeBase {
       
       this.initialized = true;
     } catch (error) {
-      console.error('[KnowledgeBase] Failed to load knowledge index:', error);
+      const initTime = Date.now() - initStartTime;
+      console.error(`[KnowledgeBase] Failed to load knowledge index after ${initTime}ms:`, error);
       throw new Error(`Failed to load knowledge index: ${error}`);
     }
   }

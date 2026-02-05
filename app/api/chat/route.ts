@@ -23,12 +23,12 @@ const CONFIG = {
   defaultLimit: 10,
   maxLimit: 50,
   defaultSearchTimeout: 5000,
-  // OpenRouter timeout - must be less than Vercel serverless timeout
-  openRouterTimeout: 10000, // 10 seconds
+  // OpenRouter timeout - increased to 25s for Vercel Edge runtime
+  openRouterTimeout: 25000, // 25 seconds
   // Knowledge base initialization timeout
   kbInitTimeout: 5000, // 5 seconds
   // Max retries for OpenRouter
-  maxRetries: 2,
+  maxRetries: 1, // Reduced to avoid cumulative timeout
 };
 
 // ============================================================================
@@ -106,9 +106,9 @@ async function callOpenRouterWithRetry(
           'X-Title': 'YC Advisor',
         },
         body: JSON.stringify({
-          model: 'anthropic/claude-3.5-sonnet',
+          model: 'anthropic/claude-3.5-haiku', // Fast model for quick responses
           messages,
-          max_tokens: 2048, // Reduced from 4096 to speed up response
+          max_tokens: 1024, // Reduced for faster response
           temperature: 0.7,
         }),
         signal: controller.signal,
@@ -305,7 +305,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // Search for relevant resources with timeout protection
     let searchResult;
     try {
-      searchPromise = kb.search({
+      const searchPromise = kb.search({
         keywords: searchQuery.keywords || [],
         rawQuery: message,
         filters: searchQuery.filters || {},
