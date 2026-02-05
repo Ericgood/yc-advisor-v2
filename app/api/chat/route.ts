@@ -34,8 +34,8 @@ let kbInstance: KnowledgeBase | null = null;
 async function getKB(): Promise<KnowledgeBase> {
   if (!kbInstance) {
     kbInstance = getKnowledgeBase({
-      indexPath: process.env.KNOWLEDGE_INDEX_PATH || './data/knowledge-index.json',
-      contentPath: process.env.KNOWLEDGE_CONTENT_PATH || './references',
+      indexPath: process.env.KNOWLEDGE_INDEX_PATH || 'data/knowledge-index.json',
+      contentPath: process.env.KNOWLEDGE_CONTENT_PATH || 'references',
       cacheSize: 100,
       cacheTtl: 5 * 60 * 1000, // 5 minutes
     });

@@ -251,14 +251,50 @@ export class KnowledgeBase {
     if (this.initialized) return;
     
     try {
-      // In Node.js environment, use fs
+      // In Node.js environment, try fs first, fallback to fetch
       if (typeof window === 'undefined') {
         const fs = await import('fs/promises');
         const path = await import('path');
         
-        const indexPath = path.resolve(this.config.indexPath);
-        const data = await fs.readFile(indexPath, 'utf-8');
-        this.index = JSON.parse(data) as KnowledgeIndex;
+        // Try multiple possible paths for different environments
+        const possiblePaths = [
+          // Environment variable override
+          process.env.KNOWLEDGE_INDEX_PATH,
+          // Relative to cwd (local dev)
+          path.resolve(this.config.indexPath),
+          // Relative to cwd with ./
+          path.resolve(process.cwd(), this.config.indexPath),
+          // Vercel serverless specific paths
+          path.resolve(process.cwd(), 'data/knowledge-index.json'),
+          path.join(process.cwd(), 'data/knowledge-index.json'),
+        ].filter(Boolean) as string[];
+        
+        let data: string | null = null;
+        
+        for (const indexPath of possiblePaths) {
+          try {
+            // Check if file exists first
+            await fs.access(indexPath);
+            data = await fs.readFile(indexPath, 'utf-8');
+            console.log(`[KnowledgeBase] Loaded index from: ${indexPath}`);
+            break;
+          } catch {
+            continue;
+          }
+        }
+        
+        if (data) {
+          this.index = JSON.parse(data) as KnowledgeIndex;
+        } else {
+          // Fallback to fetch API if fs fails (e.g., in some serverless environments)
+          console.log('[KnowledgeBase] Falling back to fetch API for index');
+          const indexUrl = process.env.KNOWLEDGE_INDEX_URL || '/data/knowledge-index.json';
+          const response = await fetch(indexUrl);
+          if (!response.ok) {
+            throw new Error(`Failed to fetch index from ${indexUrl}: ${response.status}`);
+          }
+          this.index = await response.json() as KnowledgeIndex;
+        }
       } else {
         // In browser, fetch the index
         const response = await fetch(this.config.indexPath);
@@ -267,6 +303,7 @@ export class KnowledgeBase {
       
       this.initialized = true;
     } catch (error) {
+      console.error('[KnowledgeBase] Failed to load knowledge index:', error);
       throw new Error(`Failed to load knowledge index: ${error}`);
     }
   }
@@ -360,17 +397,53 @@ export class KnowledgeBase {
     
     try {
       // Load content from file
-      let content: string;
+      let content: string | undefined;
       
       if (typeof window === 'undefined') {
         const fs = await import('fs/promises');
         const path = await import('path');
         
-        const filePath = path.resolve(this.config.contentPath, meta.filePath);
-        content = await fs.readFile(filePath, 'utf-8');
+        // Try multiple possible paths for different environments
+        const possiblePaths = [
+          path.resolve(this.config.contentPath, meta.filePath),
+          path.resolve(process.cwd(), this.config.contentPath, meta.filePath),
+          path.join(process.cwd(), this.config.contentPath, meta.filePath),
+          path.resolve('references', meta.filePath),
+          path.join(process.cwd(), 'references', meta.filePath),
+        ];
+        
+        let loaded = false;
+        
+        for (const filePath of possiblePaths) {
+          try {
+            await fs.access(filePath);
+            content = await fs.readFile(filePath, 'utf-8');
+            console.log(`[KnowledgeBase] Loaded resource ${code} from: ${filePath}`);
+            loaded = true;
+            break;
+          } catch {
+            continue;
+          }
+        }
+        
+        if (!loaded) {
+          // Fallback to fetch API
+          const contentUrl = `${process.env.KNOWLEDGE_CONTENT_URL || '/references'}/${meta.filePath}`;
+          console.log(`[KnowledgeBase] Falling back to fetch for resource ${code}: ${contentUrl}`);
+          const response = await fetch(contentUrl);
+          if (!response.ok) {
+            throw new Error(`Failed to fetch resource from ${contentUrl}: ${response.status}`);
+          }
+          content = await response.text();
+        }
       } else {
         const response = await fetch(`${this.config.contentPath}/${meta.filePath}`);
         content = await response.text();
+      }
+      
+      // Ensure content is defined (should always be due to logic above)
+      if (!content) {
+        throw new Error('Failed to load content');
       }
       
       const resource: Resource = {
@@ -384,7 +457,7 @@ export class KnowledgeBase {
       return resource;
     } catch (error) {
       // Fallback: return resource with summary instead of full content
-      console.warn(`Failed to load resource ${code}, using fallback:`, error);
+      console.warn(`[KnowledgeBase] Failed to load resource ${code}, using fallback:`, error);
       const fallbackResource: Resource = {
         ...meta,
         content: `# ${meta.title}\n\n**Author:** ${meta.author}\n**Type:** ${meta.type}\n**URL:** ${meta.url}\n\n*(Full content not available in this environment)*\n\n**Topics:** ${meta.topics.join(', ')}`,
