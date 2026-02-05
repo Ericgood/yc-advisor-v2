@@ -383,7 +383,13 @@ export class KnowledgeBase {
       
       return resource;
     } catch (error) {
-      throw new Error(`Failed to load resource ${code}: ${error}`);
+      // Fallback: return resource with summary instead of full content
+      console.warn(`Failed to load resource ${code}, using fallback:`, error);
+      const fallbackResource: Resource = {
+        ...meta,
+        content: `# ${meta.title}\n\n**Author:** ${meta.author}\n**Type:** ${meta.type}\n**URL:** ${meta.url}\n\n*(Full content not available in this environment)*\n\n**Topics:** ${meta.topics.join(', ')}`,
+      };
+      return fallbackResource;
     }
   }
   
