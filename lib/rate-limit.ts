@@ -22,7 +22,8 @@ function cleanupExpiredRecords() {
   }
 
   lastCleanup = now;
-  for (const [ip, record] of rateLimit.entries()) {
+  const entries = Array.from(rateLimit.entries());
+  for (const [ip, record] of entries) {
     if (now > record.resetTime) {
       rateLimit.delete(ip);
     }

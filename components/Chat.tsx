@@ -18,40 +18,40 @@ import type { Message, Topic } from '@/lib/types';
 
 // 在组件外部定义 Markdown 组件配置，避免每次渲染重复创建
 const markdownComponents = {
-  h1: ({children}: {children: React.ReactNode}) => (
+  h1: ({children}: {children?: React.ReactNode}) => (
     <h1 className="text-xl font-bold text-gray-900 mt-4 mb-2">{children}</h1>
   ),
-  h2: ({children}: {children: React.ReactNode}) => (
+  h2: ({children}: {children?: React.ReactNode}) => (
     <h2 className="text-lg font-semibold text-gray-800 mt-3 mb-2">{children}</h2>
   ),
-  h3: ({children}: {children: React.ReactNode}) => (
+  h3: ({children}: {children?: React.ReactNode}) => (
     <h3 className="text-base font-medium text-gray-800 mt-2 mb-1">{children}</h3>
   ),
-  strong: ({children}: {children: React.ReactNode}) => (
+  strong: ({children}: {children?: React.ReactNode}) => (
     <strong className="font-semibold text-gray-900">{children}</strong>
   ),
-  code: ({children}: {children: React.ReactNode}) => (
+  code: ({children}: {children?: React.ReactNode}) => (
     <code className="bg-gray-200 px-1 py-0.5 rounded text-sm text-orange-700">{children}</code>
   ),
-  pre: ({children}: {children: React.ReactNode}) => (
+  pre: ({children}: {children?: React.ReactNode}) => (
     <pre className="bg-gray-800 text-gray-100 p-3 rounded-lg overflow-x-auto my-2 text-sm">{children}</pre>
   ),
-  ul: ({children}: {children: React.ReactNode}) => (
+  ul: ({children}: {children?: React.ReactNode}) => (
     <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>
   ),
-  ol: ({children}: {children: React.ReactNode}) => (
+  ol: ({children}: {children?: React.ReactNode}) => (
     <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>
   ),
-  li: ({children}: {children: React.ReactNode}) => (
+  li: ({children}: {children?: React.ReactNode}) => (
     <li className="text-gray-700">{children}</li>
   ),
-  p: ({children}: {children: React.ReactNode}) => (
+  p: ({children}: {children?: React.ReactNode}) => (
     <p className="mb-2 text-gray-700 leading-relaxed">{children}</p>
   ),
-  blockquote: ({children}: {children: React.ReactNode}) => (
+  blockquote: ({children}: {children?: React.ReactNode}) => (
     <blockquote className="border-l-4 border-orange-300 pl-4 italic text-gray-600 my-2">{children}</blockquote>
   ),
-  a: ({href, children}: {href?: string; children: React.ReactNode}) => (
+  a: ({href, children}: {href?: string; children?: React.ReactNode}) => (
     <a href={href} className="text-orange-600 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>
   ),
 };

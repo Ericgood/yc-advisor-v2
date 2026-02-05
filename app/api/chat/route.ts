@@ -3,11 +3,8 @@ import { YC_KNOWLEDGE_BASE } from '@/lib/yc-knowledge';
 import { checkRateLimit } from '@/lib/rate-limit';
 import { 
   ChatMessage, 
-  ChatRequest, 
-  ValidationResult, 
-  ChatResponse,
+  ValidationResult,
   AppError,
-  ErrorCode,
   successResponse,
   errorResponse 
 } from '@/lib/types';
@@ -152,7 +149,7 @@ export async function POST(req: NextRequest) {
     if (!apiKey || apiKey.length < 20) {
       console.error('OPENROUTER_API_KEY not configured or invalid');
       return NextResponse.json(
-        { error: 'Service configuration error' },
+        errorResponse('服务配置错误'),
         { status: 500 }
       );
     }
@@ -200,10 +197,10 @@ export async function POST(req: NextRequest) {
       const content = data.choices?.[0]?.message?.content;
       
       if (!content) {
-        return NextResponse.json({ text: '抱歉，没有收到回复。' });
+        return NextResponse.json(successResponse({ text: '抱歉，没有收到回复。' }));
       }
 
-      return NextResponse.json({ text: content });
+      return NextResponse.json(successResponse({ text: content }));
     } catch (fetchError) {
       clearTimeout(timeoutId);
       throw fetchError;
@@ -212,15 +209,23 @@ export async function POST(req: NextRequest) {
     console.error('Chat API error:', error);
     // 生产环境隐藏详细错误信息
     const isDev = process.env.NODE_ENV === 'development';
+    
+    if (error instanceof AppError) {
+      return NextResponse.json(
+        errorResponse(error.message, isDev ? error.details : undefined),
+        { status: error.statusCode }
+      );
+    }
+    
     const errorMessage = error instanceof Error && error.name === 'AbortError'
       ? '请求超时，请稍后重试'
-      : 'Internal server error';
+      : '服务器内部错误';
     
     return NextResponse.json(
-      { 
-        error: errorMessage,
-        details: isDev && error instanceof Error ? error.message : undefined 
-      },
+      errorResponse(
+        errorMessage,
+        isDev && error instanceof Error ? error.message : undefined
+      ),
       { status: 500 }
     );
   }
