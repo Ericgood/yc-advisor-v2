@@ -86,45 +86,18 @@ export default function Chat() {
 
       if (!response.ok) throw new Error('API Error');
 
-      const reader = response.body?.getReader();
-      const decoder = new TextDecoder();
-      let content = '';
+      const data = await response.json();
+      
+      if (data.error) {
+        throw new Error(data.error);
+      }
 
       const assistantMsg: Message = {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
-        content: '',
+        content: data.text || '抱歉，没有收到回复。',
       };
       setMessages(prev => [...prev, assistantMsg]);
-
-      while (reader) {
-        const { done, value } = await reader.read();
-        if (done) break;
-
-        const chunk = decoder.decode(value);
-        const lines = chunk.split('\n');
-
-        for (const line of lines) {
-          if (line.startsWith('data: ')) {
-            const data = line.slice(6);
-            if (data === '[DONE]') continue;
-            
-            try {
-              const parsed = JSON.parse(data);
-              if (parsed.text) {
-                content += parsed.text;
-                setMessages(prev => {
-                  const newMessages = [...prev];
-                  newMessages[newMessages.length - 1].content = content;
-                  return newMessages;
-                });
-              }
-            } catch {
-              // ignore
-            }
-          }
-        }
-      }
     } catch {
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
