@@ -66,8 +66,6 @@ export async function POST(req: NextRequest) {
       headers: {
         'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://yc-advisor-v2.vercel.app',
-        'X-Title': 'YC Advisor',
       },
       body: JSON.stringify({
         model: 'anthropic/claude-3.5-sonnet',
@@ -78,6 +76,7 @@ export async function POST(req: NextRequest) {
 
     if (!response.ok) {
       const error = await response.text();
+      console.error('OpenRouter error:', error);
       throw new Error(`OpenRouter API error: ${error}`);
     }
 
