@@ -11,8 +11,6 @@ import {
   ResourceMeta,
   ApiSearchRequest,
   ApiSearchResponse,
-  ApiResourceResponse,
-  ApiCategoriesResponse,
   InvalidQueryError,
   ResourceNotFoundError,
 } from '../../../lib/knowledge';
@@ -315,62 +313,6 @@ function handleError(error: unknown): NextResponse {
 // Additional Endpoints (for /api/knowledge/*)
 // ============================================================================
 
-/**
- * GET /api/knowledge/resource/:code
- */
-export async function getResource(code: string): Promise<NextResponse> {
-  try {
-    const kb = await getKB();
-    const resource = await kb.loadResource(code);
-    
-    const related = kb.getResourcesByCodes(resource.related || []);
-    
-    const response: ApiResourceResponse = {
-      meta: {
-        code: resource.code,
-        title: resource.title,
-        author: resource.author,
-        type: resource.type,
-        url: resource.url,
-        topics: resource.topics,
-        founderStage: resource.founderStage,
-        lines: resource.lines,
-        filePath: resource.filePath,
-        hasTranscript: resource.hasTranscript,
-        related: resource.related,
-      },
-      content: resource.content,
-      related,
-    };
-    
-    return NextResponse.json(response);
-    
-  } catch (error) {
-    return handleError(error);
-  }
-}
-
-/**
- * GET /api/knowledge/categories
- */
-export async function getCategories(): Promise<NextResponse> {
-  try {
-    const kb = await getKB();
-    const categories = kb.getCategories();
-    const stats = kb.getStats();
-    
-    const response: ApiCategoriesResponse = {
-      categories: categories.map(c => ({
-        id: c.id,
-        name: c.name,
-        count: c.count,
-      })),
-      totalResources: stats.totalResources,
-    };
-    
-    return NextResponse.json(response);
-    
-  } catch (error) {
-    return handleError(error);
-  }
-}
+// Note: Additional endpoints moved to separate route files
+// - GET /api/knowledge/resource/:code -> app/api/knowledge/resource/[code]/route.ts
+// - GET /api/knowledge/categories -> app/api/knowledge/categories/route.ts
