@@ -13,6 +13,49 @@ import {
 } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import { ErrorBoundary } from './ErrorBoundary';
+
+// 在组件外部定义 Markdown 组件配置，避免每次渲染重复创建
+const markdownComponents = {
+  h1: ({children}: {children: React.ReactNode}) => (
+    <h1 className="text-xl font-bold text-gray-900 mt-4 mb-2">{children}</h1>
+  ),
+  h2: ({children}: {children: React.ReactNode}) => (
+    <h2 className="text-lg font-semibold text-gray-800 mt-3 mb-2">{children}</h2>
+  ),
+  h3: ({children}: {children: React.ReactNode}) => (
+    <h3 className="text-base font-medium text-gray-800 mt-2 mb-1">{children}</h3>
+  ),
+  strong: ({children}: {children: React.ReactNode}) => (
+    <strong className="font-semibold text-gray-900">{children}</strong>
+  ),
+  code: ({children}: {children: React.ReactNode}) => (
+    <code className="bg-gray-200 px-1 py-0.5 rounded text-sm text-orange-700">{children}</code>
+  ),
+  pre: ({children}: {children: React.ReactNode}) => (
+    <pre className="bg-gray-800 text-gray-100 p-3 rounded-lg overflow-x-auto my-2 text-sm">{children}</pre>
+  ),
+  ul: ({children}: {children: React.ReactNode}) => (
+    <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>
+  ),
+  ol: ({children}: {children: React.ReactNode}) => (
+    <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>
+  ),
+  li: ({children}: {children: React.ReactNode}) => (
+    <li className="text-gray-700">{children}</li>
+  ),
+  p: ({children}: {children: React.ReactNode}) => (
+    <p className="mb-2 text-gray-700 leading-relaxed">{children}</p>
+  ),
+  blockquote: ({children}: {children: React.ReactNode}) => (
+    <blockquote className="border-l-4 border-orange-300 pl-4 italic text-gray-600 my-2">{children}</blockquote>
+  ),
+  a: ({href, children}: {href?: string; children: React.ReactNode}) => (
+    <a href={href} className="text-orange-600 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>
+  ),
+};
+
+const remarkPlugins = [remarkGfm];
 
 interface Message {
   id: string;
@@ -30,12 +73,11 @@ const TOPICS = [
   { id: 'mindset', label: '🧠 创业心态', prompt: '如何保持创业动力？' },
 ];
 
-export default function Chat() {
-  const [messages, setMessages] = useState<Message[]>([
-    {
-      id: 'welcome',
-      role: 'assistant',
-      content: `你好！我是 **YC Advisor**，你的创业咨询助手。
+// 欢迎消息常量，避免重复定义
+const WELCOME_MESSAGE: Message = {
+  id: 'welcome',
+  role: 'assistant',
+  content: `你好！我是 **YC Advisor**，你的创业咨询助手。
 
 我基于 **Y Combinator** 的 443+ 个精选资源为你提供建议，包括：
 - Paul Graham 的经典文章
@@ -43,8 +85,10 @@ export default function Chat() {
 - 成功创始人的实战经验
 
 你可以问我任何关于创业的问题，或者点击下方的话题开始！`,
-    },
-  ]);
+};
+
+export default function Chat() {
+  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
@@ -98,7 +142,8 @@ export default function Chat() {
         content: data.text || '抱歉，没有收到回复。',
       };
       setMessages(prev => [...prev, assistantMsg]);
-    } catch {
+    } catch (err) {
+      console.error('Chat error:', err);
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         role: 'assistant',
@@ -133,33 +178,25 @@ export default function Chat() {
       await navigator.clipboard.writeText(content);
       setCopiedId(id);
       setTimeout(() => setCopiedId(null), 2000);
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error('Failed to copy message:', err);
     }
   };
 
   const regenerate = () => {
-    const lastUser = [...messages].reverse().find(m => m.role === 'user');
-    if (lastUser) {
-      setMessages(prev => prev.slice(0, -1));
+    // 找到最后一条用户消息的索引
+    const lastUserIndex = messages.length - 1 - [...messages].reverse().findIndex(m => m.role === 'user');
+    if (lastUserIndex >= 0) {
+      const lastUser = messages[lastUserIndex];
+      // 删除该用户消息之后的所有消息（通常是助手回复）
+      setMessages(prev => prev.slice(0, lastUserIndex + 1));
       sendMessage(lastUser.content);
     }
   };
 
   const clearChat = () => {
     if (confirm('确定清空对话？')) {
-      setMessages([{
-        id: 'welcome',
-        role: 'assistant',
-        content: `你好！我是 **YC Advisor**，你的创业咨询助手。
-
-我基于 **Y Combinator** 的 443+ 个精选资源为你提供建议，包括：
-- Paul Graham 的经典文章
-- YC 合伙人的最新观点
-- 成功创始人的实战经验
-
-你可以问我任何关于创业的问题，或者点击下方的话题开始！`,
-      }]);
+      setMessages([WELCOME_MESSAGE]);
     }
   };
 
@@ -212,6 +249,7 @@ export default function Chat() {
           <button
             onClick={clearChat}
             className="w-full flex items-center justify-center gap-2 px-4 py-2 text-sm text-gray-600 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors"
+            aria-label="清空所有对话"
           >
             <Trash2 size={16} />
             清空对话
@@ -226,6 +264,8 @@ export default function Chat() {
           <button
             onClick={() => setSidebarOpen(!sidebarOpen)}
             className="lg:hidden p-2 hover:bg-gray-100 rounded-lg"
+            aria-label={sidebarOpen ? '关闭侧边栏' : '打开侧边栏'}
+            aria-expanded={sidebarOpen}
           >
             {sidebarOpen ? <X size={20} /> : <Menu size={20} />}
           </button>
@@ -249,25 +289,14 @@ export default function Chat() {
                     <p className="whitespace-pre-wrap text-white">{msg.content}</p>
                   ) : (
                     <div className="prose prose-sm max-w-none text-gray-800">
-                      <ReactMarkdown 
-                        remarkPlugins={[remarkGfm]}
-                        components={{
-                          h1: ({children}) => <h1 className="text-xl font-bold text-gray-900 mt-4 mb-2">{children}</h1>,
-                          h2: ({children}) => <h2 className="text-lg font-semibold text-gray-800 mt-3 mb-2">{children}</h2>,
-                          h3: ({children}) => <h3 className="text-base font-medium text-gray-800 mt-2 mb-1">{children}</h3>,
-                          strong: ({children}) => <strong className="font-semibold text-gray-900">{children}</strong>,
-                          code: ({children}) => <code className="bg-gray-200 px-1 py-0.5 rounded text-sm text-orange-700">{children}</code>,
-                          pre: ({children}) => <pre className="bg-gray-800 text-gray-100 p-3 rounded-lg overflow-x-auto my-2 text-sm">{children}</pre>,
-                          ul: ({children}) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
-                          ol: ({children}) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
-                          li: ({children}) => <li className="text-gray-700">{children}</li>,
-                          p: ({children}) => <p className="mb-2 text-gray-700 leading-relaxed">{children}</p>,
-                          blockquote: ({children}) => <blockquote className="border-l-4 border-orange-300 pl-4 italic text-gray-600 my-2">{children}</blockquote>,
-                          a: ({href, children}) => <a href={href} className="text-orange-600 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>,
-                        }}
-                      >
-                        {msg.content}
-                      </ReactMarkdown>
+                      <ErrorBoundary fallback={<p className="text-gray-500">消息渲染出错</p>}>
+                        <ReactMarkdown
+                          remarkPlugins={remarkPlugins}
+                          components={markdownComponents}
+                        >
+                          {msg.content}
+                        </ReactMarkdown>
+                      </ErrorBoundary>
                     </div>
                   )}
                 </div>
@@ -278,6 +307,7 @@ export default function Chat() {
                     <button
                       onClick={() => copyMessage(msg.content, msg.id)}
                       className="flex items-center gap-1 px-2 py-1 text-xs text-gray-500 hover:text-gray-700"
+                      aria-label={copiedId === msg.id ? '已复制到剪贴板' : '复制消息'}
                     >
                       <Copy size={12} />
                       {copiedId === msg.id ? '已复制' : '复制'}
@@ -286,6 +316,7 @@ export default function Chat() {
                       <button
                         onClick={regenerate}
                         className="flex items-center gap-1 px-2 py-1 text-xs text-gray-500 hover:text-gray-700"
+                        aria-label="重新生成回复"
                       >
                         <RotateCcw size={12} />
                         重新生成
@@ -319,12 +350,17 @@ export default function Chat() {
         <div className="border-t border-gray-200 p-4 bg-white">
           <form onSubmit={handleSubmit} className="max-w-4xl mx-auto">
             <div className="flex items-end gap-2 bg-gray-100 rounded-xl p-2 border border-gray-200 focus-within:border-orange-300 focus-within:ring-2 focus-within:ring-orange-100 transition-all">
+              <label htmlFor="chat-input" className="sr-only">
+                输入你的创业问题
+              </label>
               <textarea
+                id="chat-input"
                 ref={textareaRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
                 onKeyDown={handleKeyDown}
                 placeholder="输入你的创业问题..."
+                aria-describedby="input-hint"
                 rows={1}
                 disabled={isLoading}
                 className="flex-1 bg-transparent border-0 resize-none px-3 py-2 focus:outline-none text-gray-800 placeholder-gray-400 min-h-[44px] max-h-[150px]"
@@ -333,11 +369,12 @@ export default function Chat() {
                 type="submit"
                 disabled={isLoading || !input.trim()}
                 className="p-2 bg-orange-500 text-white rounded-lg hover:bg-orange-600 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+                aria-label="发送消息"
               >
                 <Send size={18} />
               </button>
             </div>
-            <p className="text-xs text-gray-400 text-center mt-2">按 Enter 发送，Shift + Enter 换行</p>
+            <p id="input-hint" className="text-xs text-gray-400 text-center mt-2">按 Enter 发送，Shift + Enter 换行</p>
           </form>
         </div>
       </main>

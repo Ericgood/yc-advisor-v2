@@ -1,5 +1,84 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { YC_KNOWLEDGE_BASE } from '@/lib/yc-knowledge';
+import { checkRateLimit } from '@/lib/rate-limit';
+
+// 请求验证
+interface ChatMessage {
+  role: 'user' | 'assistant';
+  content: string;
+}
+
+interface ChatRequest {
+  message: string;
+  history?: ChatMessage[];
+}
+
+interface ValidationResult {
+  valid: boolean;
+  error?: string;
+  data?: { message: string; history: ChatMessage[] };
+}
+
+function validateChatRequest(body: unknown): ValidationResult {
+  if (!body || typeof body !== 'object') {
+    return { valid: false, error: '请求体无效' };
+  }
+
+  const { message, history } = body as Record<string, unknown>;
+
+  // 验证 message
+  if (typeof message !== 'string') {
+    return { valid: false, error: '消息必须是字符串' };
+  }
+
+  if (message.trim().length === 0) {
+    return { valid: false, error: '消息不能为空' };
+  }
+
+  if (message.length > 10000) {
+    return { valid: false, error: '消息过长，最多10000字符' };
+  }
+
+  // 验证 history
+  const validatedHistory: ChatMessage[] = [];
+
+  if (history !== undefined) {
+    if (!Array.isArray(history)) {
+      return { valid: false, error: 'history 必须是数组' };
+    }
+
+    if (history.length > 20) {
+      return { valid: false, error: 'history 最多20条消息' };
+    }
+
+    for (const item of history) {
+      if (!item || typeof item !== 'object') {
+        return { valid: false, error: 'history 消息格式无效' };
+      }
+
+      const { role, content } = item as Record<string, unknown>;
+
+      if (role !== 'user' && role !== 'assistant') {
+        return { valid: false, error: 'history 消息 role 必须是 user 或 assistant' };
+      }
+
+      if (typeof content !== 'string') {
+        return { valid: false, error: 'history 消息 content 必须是字符串' };
+      }
+
+      if (content.length > 10000) {
+        return { valid: false, error: 'history 消息过长' };
+      }
+
+      validatedHistory.push({ role, content });
+    }
+  }
+
+  return {
+    valid: true,
+    data: { message: message.trim(), history: validatedHistory },
+  };
+}
 
 const SYSTEM_PROMPT = `你是 **YC Advisor**，一位经验丰富的 Y Combinator 合伙人。
 
@@ -43,15 +122,44 @@ ${YC_KNOWLEDGE_BASE}
 
 export async function POST(req: NextRequest) {
   try {
-    const { message, history = [] } = await req.json();
+    // Rate Limiting
+    const ip = req.headers.get('x-forwarded-for')?.split(',')[0] ||
+               req.headers.get('x-real-ip') ||
+               'unknown';
+    const rateLimitResult = checkRateLimit(ip);
 
-    // Debug: Log key existence (not the actual key)
-    console.log('OPENROUTER_API_KEY exists:', !!process.env.OPENROUTER_API_KEY);
-    console.log('OPENROUTER_API_KEY length:', process.env.OPENROUTER_API_KEY?.length);
-
-    if (!process.env.OPENROUTER_API_KEY) {
+    if (!rateLimitResult.allowed) {
       return NextResponse.json(
-        { error: 'OPENROUTER_API_KEY not configured' },
+        { error: '请求过于频繁，请稍后重试' },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(rateLimitResult.retryAfter || 60),
+            'X-RateLimit-Remaining': '0',
+          },
+        }
+      );
+    }
+
+    const body = await req.json();
+
+    // 输入验证
+    const validation = validateChatRequest(body);
+    if (!validation.valid || !validation.data) {
+      return NextResponse.json(
+        { error: validation.error || '请求参数无效' },
+        { status: 400 }
+      );
+    }
+
+    const { message, history } = validation.data;
+
+    // 验证 API Key（更严格的验证）
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey || apiKey.length < 20) {
+      console.error('OPENROUTER_API_KEY not configured or invalid');
+      return NextResponse.json(
+        { error: 'Service configuration error' },
         { status: 500 }
       );
     }
@@ -65,40 +173,61 @@ export async function POST(req: NextRequest) {
       { role: 'user' as const, content: message },
     ];
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://yc-advisor-v2.vercel.app',
-        'X-Title': 'YC Advisor',
-      },
-      body: JSON.stringify({
-        model: 'anthropic/claude-3.5-sonnet',
-        messages,
-        max_tokens: 4096,
-      }),
-    });
+    // 添加请求超时控制
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
 
-    if (!response.ok) {
-      const error = await response.text();
-      console.error('OpenRouter error status:', response.status);
-      console.error('OpenRouter error body:', error);
-      throw new Error(`OpenRouter API error: ${error}`);
+    try {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.APP_URL || 'http://localhost:3000',
+          'X-Title': 'YC Advisor',
+        },
+        body: JSON.stringify({
+          model: 'anthropic/claude-3.5-sonnet',
+          messages,
+          max_tokens: 4096,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const error = await response.text();
+        console.error('OpenRouter error status:', response.status);
+        console.error('OpenRouter error body:', error);
+        throw new Error(`OpenRouter API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+      
+      if (!content) {
+        return NextResponse.json({ text: '抱歉，没有收到回复。' });
+      }
+
+      return NextResponse.json({ text: content });
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      throw fetchError;
     }
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
-    
-    if (!content) {
-      return NextResponse.json({ text: '抱歉，没有收到回复。' });
-    }
-
-    return NextResponse.json({ text: content });
   } catch (error) {
     console.error('Chat API error:', error);
+    // 生产环境隐藏详细错误信息
+    const isDev = process.env.NODE_ENV === 'development';
+    const errorMessage = error instanceof Error && error.name === 'AbortError'
+      ? '请求超时，请稍后重试'
+      : 'Internal server error';
+    
     return NextResponse.json(
-      { error: 'Internal server error', details: String(error) },
+      { 
+        error: errorMessage,
+        details: isDev && error instanceof Error ? error.message : undefined 
+      },
       { status: 500 }
     );
   }
