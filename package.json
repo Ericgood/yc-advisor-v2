@@ -5,8 +5,8 @@
   "main": "dist/lib/knowledge/index.js",
   "types": "dist/lib/knowledge/index.d.ts",
   "scripts": {
-    "build": "tsc && npm run build:index",
-    "build:index": "tsx scripts/build-index.ts",
+    "build": "next build",
+    "build:index": "npx tsx scripts/build-index.ts",
     "dev": "next dev",
     "start": "next start",
     "lint": "eslint . --ext .ts,.tsx",
