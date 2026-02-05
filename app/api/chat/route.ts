@@ -1,10 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import Anthropic from '@anthropic-ai/sdk';
 import { YC_KNOWLEDGE_BASE } from '@/lib/yc-knowledge';
-
-const anthropic = new Anthropic({
-  apiKey: process.env.ANTHROPIC_API_KEY || '',
-});
 
 const SYSTEM_PROMPT = `你是 **YC Advisor**，一位经验丰富的 Y Combinator 合伙人。
 
@@ -50,14 +45,15 @@ export async function POST(req: NextRequest) {
   try {
     const { message, history = [] } = await req.json();
 
-    if (!process.env.ANTHROPIC_API_KEY) {
+    if (!process.env.OPENROUTER_API_KEY) {
       return NextResponse.json(
-        { error: 'ANTHROPIC_API_KEY not configured' },
+        { error: 'OPENROUTER_API_KEY not configured' },
         { status: 500 }
       );
     }
 
-    const messages: Anthropic.MessageParam[] = [
+    const messages = [
+      { role: 'system' as const, content: SYSTEM_PROMPT },
       ...history.map((h: {role: string; content: string}) => ({
         role: h.role as 'user' | 'assistant',
         content: h.content,
@@ -65,19 +61,34 @@ export async function POST(req: NextRequest) {
       { role: 'user' as const, content: message },
     ];
 
-    const response = await anthropic.messages.create({
-      model: 'claude-3-haiku-20240307',
-      max_tokens: 4096,
-      system: SYSTEM_PROMPT,
-      messages,
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': 'https://yc-advisor-v2.vercel.app',
+        'X-Title': 'YC Advisor',
+      },
+      body: JSON.stringify({
+        model: 'anthropic/claude-3.5-sonnet',
+        messages,
+        max_tokens: 4096,
+      }),
     });
 
-    const content = response.content[0];
-    if (content.type === 'text') {
-      return NextResponse.json({ text: content.text });
+    if (!response.ok) {
+      const error = await response.text();
+      throw new Error(`OpenRouter API error: ${error}`);
     }
 
-    return NextResponse.json({ text: 'No response' });
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
+    
+    if (!content) {
+      return NextResponse.json({ text: '抱歉，没有收到回复。' });
+    }
+
+    return NextResponse.json({ text: content });
   } catch (error) {
     console.error('Chat API error:', error);
     return NextResponse.json(
