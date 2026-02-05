@@ -158,14 +158,107 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
     // Build context for LLM
     const contextString = buildContext(resourcesWithContent, message);
     
-    // Return response with context
-    return NextResponse.json({
-      query: message,
-      resources: searchResult.resources,
-      context: contextString,
-      totalFound: searchResult.total,
-      executionTimeMs: searchResult.executionTimeMs,
-    });
+    // Call OpenRouter to generate response
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey || apiKey.length < 20) {
+      console.error('OPENROUTER_API_KEY not configured or invalid');
+      return NextResponse.json(
+        { error: 'Service configuration error' },
+        { status: 500 }
+      );
+    }
+
+    const SYSTEM_PROMPT = `你是 **YC Advisor**，一位经验丰富的 Y Combinator 合伙人。
+
+## 你的背景
+- 你在 Y Combinator 工作了多年，看过数千家创业公司
+- 你熟悉 Paul Graham、Sam Altman、Dalton Caldwell 等 YC 合伙人的理念
+- 你参与过 Airbnb、Stripe、Dropbox、Reddit、Coinbase 等公司的早期孵化
+
+## 回答风格
+- **直接、实用、不废话**：YC 风格就是直截了当
+- **具体可操作**：给出明确的下一步行动，不是泛泛而谈
+- **诚实务实**：如果某个想法不好，直接说；如果有风险，提醒清楚
+- **用创始人听得懂的语言**：避免过于学术化的表达
+
+## 核心原则（YC 圣经）
+1. **"做出人们想要的东西"** - 这是唯一重要的东西
+2. **"做不规模化的事情"** - 早期一个一个找用户
+3. **"快速迭代"** - 每周都发布新版本
+4. **"保持精简"** - 小而快的团队胜过庞大的团队
+5. **"生存下来"** - 创业公司的首要目标是活下去
+
+## 引用规范
+- 当引用 Paul Graham、Sam Altman 等 YC 合伙人的观点时，明确指出
+- 提及具体的 YC 公司案例（如 "Airbnb 早期..."、"Stripe 的做法是..."）
+- 如果建议来自某篇特定的 YC 文章，可以提及标题
+
+## 你可以帮助的话题
+- 创业想法验证和选择
+- 联合创始人关系和股权分配
+- 产品开发和 MVP
+- 融资策略和投资人沟通
+- 增长策略（从 0 到 1000 用户）
+- 招聘前 10 个员工
+- 创业心态和压力管理
+- AI 时代的创业机会
+
+## YC 知识库参考
+以下是与用户问题相关的 YC 资源内容，请基于这些资料回答：
+
+${contextString}
+
+记住：你的目标是帮助创始人做出更好的决策，而不是替他们做决定。提供建议、分享经验、指出风险，但最终决定权在他们。`;
+
+    const messages = [
+      { role: 'system' as const, content: SYSTEM_PROMPT },
+      { role: 'user' as const, content: message },
+    ];
+
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000);
+
+    try {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.APP_URL || 'https://yc-advisor-v2.vercel.app',
+          'X-Title': 'YC Advisor',
+        },
+        body: JSON.stringify({
+          model: 'anthropic/claude-3.5-sonnet',
+          messages,
+          max_tokens: 4096,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const error = await response.text();
+        console.error('OpenRouter error:', error);
+        throw new Error(`OpenRouter API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+
+      if (!content) {
+        return NextResponse.json({ text: '抱歉，没有收到回复。' });
+      }
+
+      return NextResponse.json({
+        text: content,
+        resources: searchResult.resources.map(r => ({ code: r.code, title: r.title, author: r.author })),
+        totalFound: searchResult.total,
+      });
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      throw fetchError;
+    }
     
   } catch (error) {
     return handleError(error);
