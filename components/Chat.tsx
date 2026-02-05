@@ -155,6 +155,7 @@ export default function Chat() {
         id: (Date.now() + 1).toString(),
         role: 'assistant',
         content: data.text || '抱歉，没有收到回复。',
+        resources: data.resources,
       };
       setMessages(prev => [...prev, assistantMsg]);
     } catch (err) {
@@ -316,6 +317,24 @@ export default function Chat() {
                     </div>
                   )}
                 </div>
+
+                {/* 引用来源 */}
+                {msg.role === 'assistant' && msg.resources && msg.resources.length > 0 && (
+                  <div className="mt-2 p-2 bg-orange-50 rounded-lg border border-orange-100">
+                    <p className="text-xs font-semibold text-orange-700 mb-1">参考资料：</p>
+                    <div className="flex flex-wrap gap-2">
+                      {msg.resources.map((resource) => (
+                        <span
+                          key={resource.code}
+                          className="text-xs text-orange-600 bg-white px-2 py-1 rounded border border-orange-200"
+                          title={`${resource.title} - ${resource.author}`}
+                        >
+                          {resource.author} · {resource.title.slice(0, 20)}{resource.title.length > 20 ? '...' : ''}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
 
                 {/* 操作按钮 */}
                 {msg.role === 'assistant' && (

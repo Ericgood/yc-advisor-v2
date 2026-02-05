@@ -45,6 +45,7 @@ export interface Message {
   id: string;
   role: 'user' | 'assistant';
   content: string;
+  resources?: { code: string; title: string; author: string }[];
 }
 
 export interface Topic {

@@ -168,6 +168,12 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
       );
     }
 
+    // Build citations from resources
+    const citations = resourcesWithContent
+      .filter(r => r.content)
+      .map(r => `- **${r.meta.title}** by ${r.meta.author}`)
+      .join('\n');
+
     const SYSTEM_PROMPT = `你是 **YC Advisor**，一位经验丰富的 Y Combinator 合伙人。
 
 ## 你的背景
@@ -188,10 +194,14 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 4. **"保持精简"** - 小而快的团队胜过庞大的团队
 5. **"生存下来"** - 创业公司的首要目标是活下去
 
-## 引用规范
-- 当引用 Paul Graham、Sam Altman 等 YC 合伙人的观点时，明确指出
+## 引用规范（必须遵守）
+- **每个观点都要标注来源**：使用 "[作者名 - 文章标题]" 格式
+- **示例**："根据 Paul Graham 在《How to Get Startup Ideas》中的观点..."
+- **示例**："Sam Altman 在《How to Raise Money》中提到..."
+- **示例**："YC 合伙人 Dalton Caldwell 认为..."
 - 提及具体的 YC 公司案例（如 "Airbnb 早期..."、"Stripe 的做法是..."）
-- 如果建议来自某篇特定的 YC 文章，可以提及标题
+- 如果建议来自某篇特定的 YC 文章，必须提及标题
+- **最后列出参考来源**：使用 "## 参考资料" 标题列出所有引用的资源
 
 ## 你可以帮助的话题
 - 创业想法验证和选择
@@ -204,11 +214,19 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
 - AI 时代的创业机会
 
 ## YC 知识库参考
-以下是与用户问题相关的 YC 资源内容，请基于这些资料回答：
+以下是与用户问题相关的 YC 资源内容，请基于这些资料回答。注意每个观点都要标注来源：
 
 ${contextString}
 
-记住：你的目标是帮助创始人做出更好的决策，而不是替他们做决定。提供建议、分享经验、指出风险，但最终决定权在他们。`;
+## 本次回答可用的参考资料
+${citations}
+
+记住：
+1. **每个观点都要标注来源** - 使用 [作者 - 标题] 格式
+2. 你的目标是帮助创始人做出更好的决策，而不是替他们做决定
+3. 最后列出 "## 参考资料" 部分
+4. 提供建议、分享经验、指出风险，但最终决定权在他们
+`;
 
     const messages = [
       { role: 'system' as const, content: SYSTEM_PROMPT },
