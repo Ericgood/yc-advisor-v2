@@ -122,15 +122,22 @@ async function* streamOpenRouter(
 // ============================================================================
 
 function buildSystemPrompt(resources: SkillContent[]): string {
+  console.log(`[buildSystemPrompt] Building prompt with ${resources.length} resources`);
+  
   // Build citations
   const citations = resources
     .map(r => `- **${r.meta.title}** by ${r.meta.author} (${r.meta.code})`)
     .join('\n');
 
-  // Build full context from resources
+  // Build full context from resources - use full content
   const contexts = resources
-    .map(r => `---\n## ${r.meta.title}\n**Author:** ${r.meta.author}\n**Type:** ${r.meta.type}\n**Code:** ${r.meta.code}\n\n${r.content.slice(0, 8000)}\n---`)
+    .map(r => {
+      console.log(`[buildSystemPrompt] Adding ${r.meta.code}: ${r.content.length} chars`);
+      return `---\n## ${r.meta.title}\n**Author:** ${r.meta.author}\n**Type:** ${r.meta.type}\n\n${r.content}\n---`;
+    })
     .join('\n\n');
+  
+  console.log(`[buildSystemPrompt] Total context length: ${contexts.length} chars`);
 
   return `你是 **YC Advisor**，一位经验丰富的 Y Combinator 合伙人。
 
