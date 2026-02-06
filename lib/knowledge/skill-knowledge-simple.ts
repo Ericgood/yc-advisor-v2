@@ -73,11 +73,12 @@ export class YCSkillKnowledge {
     return results;
   }
 
-  getAllResources(): Array<{code: string; title: string; author: string}> {
+  getAllResources(): Array<{code: string; title: string; author: string; type: string}> {
     return startupIdeasArticles.map(a => ({
       code: a.code,
       title: a.title,
       author: a.author,
+      type: a.type,
     }));
   }
 
