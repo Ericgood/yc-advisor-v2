@@ -252,10 +252,9 @@ export default function Chat() {
                   {msg.role === 'user' ? (
                     <p className="whitespace-pre-wrap text-white">{msg.content}</p>
                   ) : (
-                    <div className="max-w-none text-gray-800">
+                    <div className="max-w-none text-gray-800 markdown-content">
                       <ReactMarkdown 
                         remarkPlugins={[remarkGfm]}
-                        className="markdown-content"
                         components={{
                           h1: ({children}) => <h1 className="text-xl font-bold text-gray-900 mt-6 mb-3 border-b border-gray-200 pb-2">{children}</h1>,
                           h2: ({children}) => <h2 className="text-lg font-semibold text-gray-800 mt-5 mb-3">{children}</h2>,
