@@ -19,16 +19,10 @@ import {
 // SSE Helper Functions
 // ============================================================================
 
-/**
- * Create SSE data string
- */
 function createSSE(data: Record<string, unknown>): string {
   return `data: ${JSON.stringify(data)}\n\n`;
 }
 
-/**
- * Create SSE stream response
- */
 function createStreamResponse(stream: ReadableStream): Response {
   return new Response(stream, {
     headers: {
@@ -47,43 +41,36 @@ const CONFIG = {
   defaultLimit: 10,
   maxLimit: 50,
   defaultSearchTimeout: 5000,
-  // OpenRouter timeout - increased to 25s for Vercel Edge runtime
-  openRouterTimeout: 25000, // 25 seconds
-  // Knowledge base initialization timeout
-  kbInitTimeout: 5000, // 5 seconds
-  // Max retries for OpenRouter
-  maxRetries: 1, // Reduced to avoid cumulative timeout
+  openRouterTimeout: 25000,
+  kbInitTimeout: 5000,
+  maxRetries: 1,
 };
 
 // ============================================================================
-// Knowledge Base Singleton with Initialization Tracking
+// Knowledge Base Singleton
 // ============================================================================
 
 let kbInstance: KnowledgeBase | null = null;
 let kbInitializing: Promise<KnowledgeBase> | null = null;
 
 async function getKB(): Promise<KnowledgeBase> {
-  // Return existing instance
   if (kbInstance) {
     return kbInstance;
   }
 
-  // Return existing initialization promise to prevent duplicate initialization
   if (kbInitializing) {
     return kbInitializing;
   }
 
-  // Create new initialization promise
   kbInitializing = (async () => {
     try {
       kbInstance = getKnowledgeBase({
         indexPath: process.env.KNOWLEDGE_INDEX_PATH || 'data/knowledge-index.json',
         contentPath: process.env.KNOWLEDGE_CONTENT_PATH || 'references',
         cacheSize: 100,
-        cacheTtl: 5 * 60 * 1000, // 5 minutes
+        cacheTtl: 5 * 60 * 1000,
       });
 
-      // Initialize with timeout
       const initPromise = kbInstance.initialize();
       const timeoutPromise = new Promise<never>((_, reject) => 
         setTimeout(() => reject(new Error('Knowledge base initialization timeout')), CONFIG.kbInitTimeout)
@@ -94,7 +81,6 @@ async function getKB(): Promise<KnowledgeBase> {
       return kbInstance;
     } catch (error) {
       console.error('[getKB] Failed to initialize knowledge base:', error);
-      // Reset for retry
       kbInstance = null;
       throw error;
     } finally {
@@ -106,83 +92,10 @@ async function getKB(): Promise<KnowledgeBase> {
 }
 
 // ============================================================================
-// OpenRouter API Call with Timeout and Retry
+// OpenRouter Streaming
 // ============================================================================
 
-async function callOpenRouterWithRetry(
-  apiKey: string,
-  messages: { role: 'system' | 'user'; content: string }[],
-  retries = CONFIG.maxRetries
-): Promise<{ content: string; fromCache?: boolean }> {
-  let lastError: Error | null = null;
-
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), CONFIG.openRouterTimeout);
-
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': process.env.APP_URL || 'https://yc-advisor-v2.vercel.app',
-          'X-Title': 'YC Advisor',
-        },
-        body: JSON.stringify({
-          model: 'anthropic/claude-3.5-haiku', // Fast model for quick responses
-          messages,
-          max_tokens: 1024, // Reduced for faster response
-          temperature: 0.7,
-        }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const errorText = await response.text();
-        console.error(`[OpenRouter] Attempt ${attempt + 1} failed:`, response.status, errorText);
-        
-        // If rate limited, don't retry immediately
-        if (response.status === 429) {
-          throw new Error('Rate limited by OpenRouter');
-        }
-        
-        throw new Error(`OpenRouter API error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const content = data.choices?.[0]?.message?.content;
-
-      if (!content) {
-        throw new Error('Empty response from OpenRouter');
-      }
-
-      return { content };
-    } catch (error) {
-      lastError = error instanceof Error ? error : new Error(String(error));
-      
-      // Don't retry on abort/timeout after all retries exhausted
-      if (attempt < retries) {
-        console.log(`[OpenRouter] Retrying... (${attempt + 1}/${retries})`);
-        // Exponential backoff: 500ms, 1000ms
-        await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
-      }
-    }
-  }
-
-  throw lastError || new Error('OpenRouter API failed after retries');
-}
-
-// ============================================================================
-// OpenRouter Streaming API Call
-// ============================================================================
-
-async function* streamOpenRouter(
-  apiKey: string,
-  messages: { role: 'system' | 'user'; content: string }[]
-): AsyncGenerator<string, void, unknown> {
+async function* streamOpenRouter(apiKey: string, messages: Array<{role: string; content: string}>): AsyncGenerator<string> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), CONFIG.openRouterTimeout);
 
@@ -192,15 +105,15 @@ async function* streamOpenRouter(
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
-        'HTTP-Referer': process.env.APP_URL || 'https://yc-advisor-v2.vercel.app',
+        'HTTP-Referer': process.env.APP_URL || 'http://localhost:3000',
         'X-Title': 'YC Advisor',
       },
       body: JSON.stringify({
-        model: 'anthropic/claude-3.5-haiku',
+        model: 'anthropic/claude-3.5-sonnet',
         messages,
-        max_tokens: 1024,
+        max_tokens: 2048,
         temperature: 0.7,
-        stream: true, // Enable streaming
+        stream: true,
       }),
       signal: controller.signal,
     });
@@ -232,7 +145,7 @@ async function* streamOpenRouter(
         const trimmed = line.trim();
         if (!trimmed || !trimmed.startsWith('data: ')) continue;
 
-        const data = trimmed.slice(6); // Remove 'data: ' prefix
+        const data = trimmed.slice(6);
         
         if (data === '[DONE]') {
           return;
@@ -280,203 +193,20 @@ function generateFallbackResponse(query: string, resources: { meta: ResourceMeta
 }
 
 // ============================================================================
-// Request Handlers
+// POST Handler
 // ============================================================================
 
-/**
- * GET /api/chat/search?q=query&category=ai&limit=10
- */
-export async function GET(request: NextRequest): Promise<NextResponse> {
-  try {
-    const { searchParams } = new URL(request.url);
-    
-    // Parse query parameters
-    const params: ApiSearchRequest = {
-      q: searchParams.get('q') || '',
-      category: (searchParams.get('category') as any) || undefined,
-      stage: (searchParams.get('stage') as any) || undefined,
-      author: searchParams.get('author') || undefined,
-      type: (searchParams.get('type') as any) || undefined,
-      semantic: searchParams.get('semantic') === 'true',
-      limit: parseInt(searchParams.get('limit') || '10', 10),
-      offset: parseInt(searchParams.get('offset') || '0', 10),
-    };
-    
-    // Validate query
-    if (!params.q || params.q.trim().length < 2) {
-      throw new InvalidQueryError('Query must be at least 2 characters');
-    }
-    
-    // Enforce limits
-    const limit = Math.min(params.limit || CONFIG.defaultLimit, CONFIG.maxLimit);
-    const offset = params.offset || 0;
-    
-    // Get knowledge base with timeout
-    let kb: KnowledgeBase;
-    try {
-      kb = await getKB();
-    } catch (kbError) {
-      console.error('[GET] Knowledge base initialization failed:', kbError);
-      return NextResponse.json(
-        { error: 'Service temporarily unavailable', code: 'SERVICE_UNAVAILABLE' },
-        { status: 503 }
-      );
-    }
-    
-    // Build search query
-    const searchQuery: SearchQuery = {
-      keywords: params.q.split(/\s+/).filter(Boolean),
-      rawQuery: params.q,
-      filters: {
-        categories: params.category ? [params.category] : undefined,
-        stages: params.stage ? [params.stage] : undefined,
-        authors: params.author ? [params.author] : undefined,
-        types: params.type ? [params.type] : undefined,
-      },
-      semantic: params.semantic,
-      limit,
-      offset,
-    };
-    
-    // Execute search with timeout
-    const searchPromise = kb.search(searchQuery);
-    const timeoutPromise = new Promise<never>((_, reject) => 
-      setTimeout(() => reject(new Error('Search timeout')), CONFIG.defaultSearchTimeout)
-    );
-    
-    const result = await Promise.race([searchPromise, timeoutPromise]);
-    
-    // Build response
-    const response: ApiSearchResponse = {
-      results: result.resources,
-      total: result.total,
-      query: params.q,
-      facets: result.facets,
-      executionTimeMs: result.executionTimeMs,
-    };
-    
-    return NextResponse.json(response);
-    
-  } catch (error) {
-    return handleError(error);
-  }
-}
-
-/**
- * POST /api/chat
- * Main chat endpoint with context retrieval and streaming support
- */
-export async function POST(request: NextRequest): Promise<Response> {
+export async function POST(req: NextRequest) {
   const startTime = Date.now();
   
   try {
-    const body = await request.json();
-    const { message, options = {}, stream = false } = body;
-    
+    const { message, history = [], stream = true } = await req.json();
+
     if (!message || typeof message !== 'string') {
-      throw new InvalidQueryError('Message is required');
+      return NextResponse.json({ error: 'Message is required' }, { status: 400 });
     }
 
-    // Validate API key early
-    const apiKey = process.env.OPENROUTER_API_KEY;
-    if (!apiKey || apiKey.length < 20) {
-      console.error('OPENROUTER_API_KEY not configured or invalid');
-      return NextResponse.json(
-        { error: 'Service configuration error', code: 'CONFIG_ERROR' },
-        { status: 500 }
-      );
-    }
-    
-    // Get knowledge base with error handling
-    let kb: KnowledgeBase;
-    try {
-      kb = await getKB();
-    } catch (kbError) {
-      console.error('[POST] Knowledge base initialization failed:', kbError);
-      // Return fallback response without knowledge base
-      return NextResponse.json({
-        text: `抱歉，知识库服务暂时不可用。请稍后重试。`,
-        resources: [],
-        totalFound: 0,
-        fallback: true,
-      });
-    }
-    
-    // Extract search intent from message
-    const searchQuery = extractSearchIntent(message);
-    
-    // Search for relevant resources with timeout protection
-    let searchResult;
-    try {
-      const searchPromise = kb.search({
-        keywords: searchQuery.keywords || [],
-        rawQuery: message,
-        filters: searchQuery.filters || {},
-        limit: options.limit || 5,
-      });
-      
-      const searchTimeoutPromise = new Promise<never>((_, reject) => 
-        setTimeout(() => reject(new Error('Search timeout')), CONFIG.defaultSearchTimeout)
-      );
-      
-      searchResult = await Promise.race([searchPromise, searchTimeoutPromise]);
-    } catch (searchError) {
-      console.error('[POST] Search failed:', searchError);
-      // Continue with empty results
-      searchResult = { resources: [], total: 0, facets: {} };
-    }
-    
-    // Load top resources for context (limited to 2 for speed)
-    const resourcesWithContent = await Promise.all(
-      searchResult.resources.slice(0, 2).map(async (meta) => {
-        try {
-          const resource = await kb.loadResource(meta.code);
-          return {
-            meta,
-            content: truncateContent(resource.content, 1500),
-          };
-        } catch {
-          return { meta, content: null };
-        }
-      })
-    );
-    
-    // Build context for LLM
-    const contextString = buildContext(resourcesWithContent, message);
-    
-    // Build citations from resources
-    const citations = resourcesWithContent
-      .filter(r => r.content)
-      .map(r => `- **${r.meta.title}** by ${r.meta.author}`)
-      .join('\n');
-
-    const SYSTEM_PROMPT = `你是 **YC Advisor**，一位经验丰富的 Y Combinator 合伙人。
-
-## 你的背景
-- 你在 Y Combinator 工作了多年，看过数千家创业公司
-- 你熟悉 Paul Graham、Sam Altman、Dalton Caldwell 等 YC 合伙人的理念
-
-## 回答风格
-- **直接、实用、不废话**：YC 风格就是直截了当
-- **具体可操作**：给出明确的下一步行动
-- **诚实务实**：如果某个想法不好，直接说
-
-## 引用规范（必须遵守）
-- **每个观点都要标注来源**：使用 "[作者名 - 文章标题]" 格式
-- **最后列出参考来源**：使用 "## 参考资料" 标题
-
-## YC 知识库参考
-${contextString}
-
-## 本次回答可用的参考资料
-${citations}
-
-<<<<<<< HEAD
-export async function POST(req: NextRequest) {
-  try {
-    const { message, history = [] } = await req.json();
-
-    // 验证 API Key（更严格的验证）
+    // Validate API Key
     const apiKey = process.env.OPENROUTER_API_KEY;
     if (!apiKey || apiKey.length < 20) {
       console.error('OPENROUTER_API_KEY not configured or invalid');
@@ -485,74 +215,85 @@ export async function POST(req: NextRequest) {
         { status: 500 }
       );
     }
-=======
-记住：每个观点都要标注来源，最后列出参考资料。`;
->>>>>>> 5bcdc3effe1397bb94054f7a875f4fc6492947c9
+
+    // Get knowledge base
+    let kb: KnowledgeBase;
+    try {
+      kb = await getKB();
+    } catch (kbError) {
+      console.error('[POST] Knowledge base initialization failed:', kbError);
+      return NextResponse.json(
+        { error: 'Service temporarily unavailable', code: 'SERVICE_UNAVAILABLE' },
+        { status: 503 }
+      );
+    }
+
+    // Search knowledge base
+    const searchQuery: SearchQuery = {
+      keywords: message.split(/\s+/).filter(Boolean),
+      rawQuery: message,
+      limit: 5,
+      semantic: true,
+    };
+
+    const searchResult = await kb.search(searchQuery);
+
+    // Load full content of top resources
+    const resourcesWithContent = await Promise.all(
+      searchResult.resources.slice(0, 3).map(async (resource) => {
+        try {
+          const content = await kb.getResourceContent(resource.code);
+          return { meta: resource, content };
+        } catch (error) {
+          console.warn(`Failed to load content for ${resource.code}:`, error);
+          return { meta: resource, content: null };
+        }
+      })
+    );
+
+    // Build context from loaded content
+    const contextContent = resourcesWithContent
+      .filter(r => r.content)
+      .map(r => `---\n**${r.meta.title}** by ${r.meta.author}\n\n${r.content?.slice(0, 2000)}\n---`)
+      .join('\n\n');
+
+    const citations = resourcesWithContent
+      .filter(r => r.content)
+      .map(r => `- **${r.meta.title}** by ${r.meta.author} (${r.meta.code})`)
+      .join('\n');
+
+    // Build system prompt with full context
+    const SYSTEM_PROMPT = `你是 **YC Advisor**，一位经验丰富的 Y Combinator 合伙人。
+
+## 你的背景
+- 你在 Y Combinator 工作了多年，看过数千家创业公司
+- 你熟悉 Paul Graham、Sam Altman、Dalton Caldwell 等 YC 合伙人的理念
+- 你基于 Y Combinator 的 443+ 个精选资源提供建议
+
+## 回答风格
+- **直接、实用、不废话**：YC 风格就是直截了当
+- **具体可操作**：给出明确的下一步行动
+- **引用具体案例**：用真实的 YC 公司作为例子
+- **诚实务实**：如果某个想法不好，直接说
+
+## 引用规范（必须遵守）
+- **每个观点都要标注来源**：使用 "[作者名 - 文章标题]" 格式
+- **最后列出参考来源**：使用 "## 参考资料" 标题
+
+## 可用的参考资料
+${citations}
+
+## 参考资料详细内容（基于这些内容回答）
+${contextContent}
+
+重要：你的回答必须基于上面提供的参考资料内容。如果用户的问题不在参考资料范围内，请坦诚说明。记住：每个观点都要标注来源，最后列出参考资料。`;
 
     const messages = [
       { role: 'system' as const, content: SYSTEM_PROMPT },
+      ...history.slice(-4).map((h: {role: string; content: string}) => ({ role: h.role as 'user' | 'assistant', content: h.content })),
       { role: 'user' as const, content: message },
     ];
 
-<<<<<<< HEAD
-    // 添加请求超时控制
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
-
-    try {
-      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${apiKey}`,
-          'Content-Type': 'application/json',
-          'HTTP-Referer': process.env.APP_URL || 'http://localhost:3000',
-          'X-Title': 'YC Advisor',
-        },
-        body: JSON.stringify({
-          model: 'anthropic/claude-3.5-sonnet',
-          messages,
-          max_tokens: 4096,
-        }),
-        signal: controller.signal,
-      });
-
-      clearTimeout(timeoutId);
-
-      if (!response.ok) {
-        const error = await response.text();
-        console.error('OpenRouter error status:', response.status);
-        console.error('OpenRouter error body:', error);
-        throw new Error(`OpenRouter API error: ${response.status}`);
-      }
-
-      const data = await response.json();
-      const content = data.choices?.[0]?.message?.content;
-      
-      if (!content) {
-        return NextResponse.json({ text: '抱歉，没有收到回复。' });
-      }
-
-      return NextResponse.json({ text: content });
-    } catch (fetchError) {
-      clearTimeout(timeoutId);
-      throw fetchError;
-    }
-  } catch (error) {
-    console.error('Chat API error:', error);
-    // 生产环境隐藏详细错误信息
-    const isDev = process.env.NODE_ENV === 'development';
-    const errorMessage = error instanceof Error && error.name === 'AbortError'
-      ? '请求超时，请稍后重试'
-      : 'Internal server error';
-    
-    return NextResponse.json(
-      { 
-        error: errorMessage,
-        details: isDev && error instanceof Error ? error.message : undefined 
-      },
-      { status: 500 }
-    );
-=======
     // If streaming is requested, use streaming response
     if (stream) {
       const resources = searchResult.resources.map(r => ({ code: r.code, title: r.title, author: r.author }));
@@ -600,18 +341,19 @@ export async function POST(req: NextRequest) {
             controller.enqueue(
               createSSE({
                 type: 'done',
-                executionTimeMs: executionTime,
+                executionTime,
+                totalTokens: fullContent.length / 4, // Rough estimate
               })
             );
+            controller.close();
           } catch (error) {
             console.error('[POST] Stream error:', error);
             controller.enqueue(
               createSSE({
                 type: 'error',
-                error: error instanceof Error ? error.message : 'Stream error',
+                error: 'Failed to generate response',
               })
             );
-          } finally {
             controller.close();
           }
         },
@@ -620,205 +362,145 @@ export async function POST(req: NextRequest) {
       return createStreamResponse(streamResponse);
     }
 
-    // Non-streaming mode (original behavior)
-    let responseContent: string;
-    let usedFallback = false;
-    
-    try {
-      const result = await callOpenRouterWithRetry(apiKey, messages);
-      responseContent = result.content;
-    } catch (openRouterError) {
-      console.error('[POST] OpenRouter failed:', openRouterError);
-      // Generate fallback response
-      responseContent = generateFallbackResponse(message, resourcesWithContent);
-      usedFallback = true;
-    }
-
-    const executionTime = Date.now() - startTime;
-    console.log(`[POST] Request completed in ${executionTime}ms, fallback=${usedFallback}`);
-
-    return NextResponse.json({
-      text: responseContent,
-      resources: searchResult.resources.map(r => ({ code: r.code, title: r.title, author: r.author })),
-      totalFound: searchResult.total,
-      executionTimeMs: executionTime,
-      fallback: usedFallback,
+    // Non-streaming response
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': process.env.APP_URL || 'http://localhost:3000',
+        'X-Title': 'YC Advisor',
+      },
+      body: JSON.stringify({
+        model: 'anthropic/claude-3.5-sonnet',
+        messages,
+        max_tokens: 2048,
+        temperature: 0.7,
+      }),
     });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenRouter API error: ${response.status} - ${errorText}`);
+    }
+
+    const data = await response.json();
+    const content = data.choices?.[0]?.message?.content;
     
+    if (!content) {
+      return NextResponse.json({ text: '抱歉，没有收到回复。' });
+    }
+
+    return NextResponse.json({ 
+      text: content,
+      resources: searchResult.resources.map(r => ({ code: r.code, title: r.title, author: r.author })),
+    });
+
   } catch (error) {
-    // For streaming requests, we need to return an error stream
-    if (request.headers.get('accept')?.includes('text/event-stream')) {
-      const errorStream = new ReadableStream({
-        start(controller) {
-          controller.enqueue(
-            createSSE({
-              type: 'error',
-              error: error instanceof Error ? error.message : 'Internal error',
-            })
-          );
-          controller.close();
-        },
-      });
-      return createStreamResponse(errorStream);
-    }
-    return handleError(error);
->>>>>>> 5bcdc3effe1397bb94054f7a875f4fc6492947c9
+    console.error('[POST] Error:', error);
+    const isDev = process.env.NODE_ENV === 'development';
+    const errorMessage = error instanceof Error && error.name === 'AbortError'
+      ? '请求超时，请稍后重试'
+      : 'Internal server error';
+    
+    return NextResponse.json(
+      { 
+        error: errorMessage,
+        details: isDev && error instanceof Error ? error.message : undefined 
+      },
+      { status: 500 }
+    );
   }
 }
 
 // ============================================================================
-// Helper Functions
+// GET Handler (Search)
 // ============================================================================
 
-/**
- * Extract search intent from natural language query
- */
-function extractSearchIntent(message: string): Partial<SearchQuery> {
-  const keywords: string[] = [];
-  const filters: SearchQuery['filters'] = {};
-  
-  // Extract stage keywords
-  const stagePatterns = [
-    { pattern: /pre[-\s]?idea/i, stage: 'pre-idea' },
-    { pattern: /early stage|just starting/i, stage: 'pre-idea' },
-    { pattern: /mvp|building/i, stage: 'building' },
-    { pattern: /launched|launched/i, stage: 'launched' },
-    { pattern: /scaling|growth stage/i, stage: 'scaling' },
-  ];
-  
-  for (const { pattern, stage } of stagePatterns) {
-    if (pattern.test(message)) {
-      filters.stages = [stage as any];
-      break;
-    }
-  }
-  
-  // Extract topic keywords
-  const topicPatterns: Record<string, RegExp[]> = {
-    'fundraising': [/fundraising?|raise money|investor/i],
-    'co-founders': [/co[-\s]?founder|partner/i],
-    'ai': [/ai|artificial intelligence|ml|machine learning/i],
-    'growth': [/growth|scale|scaling/i],
-    'product': [/product|mvp|feature/i],
-  };
-  
-  for (const [topic, patterns] of Object.entries(topicPatterns)) {
-    for (const pattern of patterns) {
-      if (pattern.test(message)) {
-        filters.categories = [topic as any];
-        break;
-      }
-    }
-  }
-  
-  // Extract remaining keywords
-  const cleanMessage = message
-    .replace(/\b(how|what|when|where|why|who|is|are|do|does|can|could|would|should)\b/gi, '')
-    .replace(/\b(a|an|the|to|for|of|in|on|at|by|with)\b/gi, '')
-    .trim();
-  
-  keywords.push(...cleanMessage.split(/\s+/).filter(w => w.length > 2));
-  
-  return {
-    keywords: [...new Set(keywords)],
-    filters,
-  };
-}
-
-/**
- * Truncate content to max length
- */
-function truncateContent(content: string, maxLength: number): string {
-  if (content.length <= maxLength) return content;
-  
-  // Try to truncate at paragraph boundary
-  const truncated = content.slice(0, maxLength);
-  const lastParagraph = truncated.lastIndexOf('\n\n');
-  
-  if (lastParagraph > maxLength * 0.8) {
-    return truncated.slice(0, lastParagraph) + '\n\n...';
-  }
-  
-  return truncated + '...';
-}
-
-/**
- * Build context string from resources
- */
-function buildContext(
-  resources: { meta: ResourceMeta; content: string | null }[],
-  query: string
-): string {
-  const parts: string[] = [];
-  
-  parts.push(`# Context for: "${query}"`);
-  parts.push('');
-  
-  for (let i = 0; i < resources.length; i++) {
-    const { meta, content } = resources[i];
+export async function GET(request: NextRequest): Promise<NextResponse> {
+  try {
+    const { searchParams } = new URL(request.url);
     
-    parts.push(`## Resource ${i + 1}: ${meta.title}`);
-    parts.push(`**Author:** ${meta.author}`);
-    parts.push(`**Type:** ${meta.type}`);
-    parts.push(`**URL:** ${meta.url}`);
-    parts.push('');
+    const params: ApiSearchRequest = {
+      q: searchParams.get('q') || '',
+      category: (searchParams.get('category') as any) || undefined,
+      stage: (searchParams.get('stage') as any) || undefined,
+      author: searchParams.get('author') || undefined,
+      type: (searchParams.get('type') as any) || undefined,
+      semantic: searchParams.get('semantic') === 'true',
+      limit: parseInt(searchParams.get('limit') || '10', 10),
+      offset: parseInt(searchParams.get('offset') || '0', 10),
+    };
     
-    if (content) {
-      parts.push(content);
-    } else {
-      parts.push('(Content not available)');
+    if (!params.q || params.q.trim().length < 2) {
+      throw new InvalidQueryError('Query must be at least 2 characters');
     }
     
-    parts.push('');
-    parts.push('---');
-    parts.push('');
-  }
-  
-  return parts.join('\n');
-}
-
-/**
- * Handle errors
- */
-function handleError(error: unknown): NextResponse {
-  console.error('API Error:', error);
-  
-  if (error instanceof InvalidQueryError) {
-    return NextResponse.json(
-      { error: error.message, code: error.code },
-      { status: error.statusCode }
-    );
-  }
-  
-  if (error instanceof ResourceNotFoundError) {
-    return NextResponse.json(
-      { error: error.message, code: error.code },
-      { status: 404 }
-    );
-  }
-
-  // Check for timeout errors
-  if (error instanceof Error) {
-    if (error.message.includes('timeout') || error.name === 'AbortError') {
+    const limit = Math.min(params.limit || CONFIG.defaultLimit, CONFIG.maxLimit);
+    const offset = params.offset || 0;
+    
+    let kb: KnowledgeBase;
+    try {
+      kb = await getKB();
+    } catch (kbError) {
+      console.error('[GET] Knowledge base initialization failed:', kbError);
       return NextResponse.json(
-        { error: 'Request timeout, please try again', code: 'TIMEOUT' },
-        { status: 504 }
+        { error: 'Service temporarily unavailable', code: 'SERVICE_UNAVAILABLE' },
+        { status: 503 }
       );
     }
+    
+    const searchQuery: SearchQuery = {
+      keywords: params.q.split(/\s+/).filter(Boolean),
+      rawQuery: params.q,
+      filters: {
+        categories: params.category ? [params.category] : undefined,
+        stages: params.stage ? [params.stage] : undefined,
+        authors: params.author ? [params.author] : undefined,
+        types: params.type ? [params.type] : undefined,
+      },
+      semantic: params.semantic,
+      limit,
+      offset,
+    };
+    
+    const searchPromise = kb.search(searchQuery);
+    const timeoutPromise = new Promise<never>((_, reject) => 
+      setTimeout(() => reject(new Error('Search timeout')), CONFIG.defaultSearchTimeout)
+    );
+    
+    const result = await Promise.race([searchPromise, timeoutPromise]);
+    
+    const response: ApiSearchResponse = {
+      results: result.resources.map(r => ({
+        code: r.code,
+        title: r.title,
+        author: r.author,
+        type: r.type,
+        categories: r.categories,
+        url: `https://www.ycombinator.com/library/${r.code}`,
+      })),
+      total: result.total,
+      limit,
+      offset,
+      query: params.q,
+    };
+    
+    return NextResponse.json(response);
+    
+  } catch (error) {
+    console.error('[GET] Search error:', error);
+    
+    if (error instanceof InvalidQueryError) {
+      return NextResponse.json(
+        { error: error.message, code: 'INVALID_QUERY' },
+        { status: 400 }
+      );
+    }
+    
+    return NextResponse.json(
+      { error: 'Search failed', code: 'SEARCH_ERROR' },
+      { status: 500 }
+    );
   }
-  
-  return NextResponse.json(
-    { error: 'Internal server error', code: 'INTERNAL_ERROR' },
-    { status: 500 }
-  );
 }
-
-// ============================================================================
-// Types for Streaming
-// ============================================================================
-// Additional Endpoints (for /api/knowledge/*)
-// ============================================================================
-
-// Note: Additional endpoints moved to separate route files
-// - GET /api/knowledge/resource/:code -> app/api/knowledge/resource/[code]/route.ts
-// - GET /api/knowledge/categories -> app/api/knowledge/categories/route.ts
