@@ -239,17 +239,25 @@ export async function POST(req: NextRequest) {
     const searchResult = await kb.search(searchQuery);
 
     // Load full content of top resources
+    console.log('[POST] Search found resources:', searchResult.resources.map(r => ({ code: r.code, title: r.title, score: r.score })));
+    
     const resourcesWithContent = await Promise.all(
       searchResult.resources.slice(0, 3).map(async (resource) => {
         try {
-          const content = await kb.getResourceContent(resource.code);
+          console.log(`[POST] Loading content for ${resource.code}...`);
+          const loadedResource = await kb.loadResource(resource.code);
+          const content = loadedResource.content;
+          const contentLength = content?.length || 0;
+          console.log(`[POST] Loaded ${resource.code}: ${contentLength} chars`);
           return { meta: resource, content };
         } catch (error) {
-          console.warn(`Failed to load content for ${resource.code}:`, error);
+          console.warn(`[POST] Failed to load content for ${resource.code}:`, error);
           return { meta: resource, content: null };
         }
       })
     );
+    
+    console.log('[POST] Resources with content:', resourcesWithContent.map(r => ({ code: r.meta.code, hasContent: !!r.content, length: r.content?.length })));
 
     // Build context from loaded content
     const contextContent = resourcesWithContent
