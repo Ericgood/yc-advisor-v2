@@ -30,11 +30,16 @@ export class YCSkillKnowledge {
   private initialized = false;
 
   constructor(
-    quickIndexPath: string = '/Users/gongzhen/.openclaw/workspace/skills/yc-advisor/references/quick-index.md',
-    referencesPath: string = '/Users/gongzhen/.openclaw/workspace/skills/yc-advisor/references'
+    quickIndexPath?: string,
+    referencesPath?: string
   ) {
-    this.quickIndexPath = quickIndexPath;
-    this.referencesPath = referencesPath;
+    // Use environment variables or fallback to project-relative paths
+    this.quickIndexPath = quickIndexPath || 
+      process.env.QUICK_INDEX_PATH || 
+      path.join(process.cwd(), 'data', 'references', 'quick-index.md');
+    this.referencesPath = referencesPath || 
+      process.env.REFERENCES_PATH || 
+      path.join(process.cwd(), 'data', 'references');
   }
 
   /**
