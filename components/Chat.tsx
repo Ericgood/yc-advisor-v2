@@ -124,17 +124,31 @@ export default function Chat() {
       textareaRef.current.style.height = 'auto';
     }
 
+    // Create assistant message placeholder for streaming
+    const assistantMsgId = (Date.now() + 1).toString();
+    const assistantMsg: Message = {
+      id: assistantMsgId,
+      role: 'assistant',
+      content: '',
+      resources: [],
+    };
+    setMessages(prev => [...prev, assistantMsg]);
+
     try {
       const controller = new AbortController();
-      // Reduced timeout to match backend - 15 seconds
-      const timeoutId = setTimeout(() => controller.abort(), 15000);
+      // Longer timeout for streaming (60 seconds)
+      const timeoutId = setTimeout(() => controller.abort(), 60000);
 
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Accept': 'text/event-stream',
+        },
         body: JSON.stringify({
           message: text,
           history: messages.slice(-6).map(m => ({ role: m.role, content: m.content })),
+          stream: true, // Enable streaming
         }),
         signal: controller.signal,
       });
@@ -146,27 +160,110 @@ export default function Chat() {
         throw new Error(errorData.error || `请求失败: ${response.status}`);
       }
 
-      const data = await response.json();
-      
-      if (data.error) {
-        throw new Error(data.error);
-      }
+      // Handle streaming response
+      if (response.headers.get('content-type')?.includes('text/event-stream')) {
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error('No response body');
+        }
 
-      const assistantMsg: Message = {
-        id: (Date.now() + 1).toString(),
-        role: 'assistant',
-        content: data.text || '抱歉，没有收到回复。',
-        resources: data.resources,
-      };
-      setMessages(prev => [...prev, assistantMsg]);
+        const decoder = new TextDecoder();
+        let buffer = '';
+        let fullContent = '';
+        let resources: Message['resources'] = [];
+
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+
+            buffer += decoder.decode(value, { stream: true });
+            const lines = buffer.split('\n');
+            buffer = lines.pop() || '';
+
+            for (const line of lines) {
+              const trimmed = line.trim();
+              if (!trimmed.startsWith('data: ')) continue;
+
+              const dataStr = trimmed.slice(6); // Remove 'data: ' prefix
+              
+              try {
+                const data = JSON.parse(dataStr);
+                
+                switch (data.type) {
+                  case 'metadata':
+                    // Update resources when metadata is received
+                    if (data.resources) {
+                      resources = data.resources;
+                      setMessages(prev => 
+                        prev.map(msg => 
+                          msg.id === assistantMsgId 
+                            ? { ...msg, resources }
+                            : msg
+                        )
+                      );
+                    }
+                    break;
+                    
+                  case 'content':
+                    // Append content chunk
+                    if (data.chunk) {
+                      fullContent += data.chunk;
+                      setMessages(prev => 
+                        prev.map(msg => 
+                          msg.id === assistantMsgId 
+                            ? { ...msg, content: fullContent }
+                            : msg
+                        )
+                      );
+                    }
+                    break;
+                    
+                  case 'done':
+                    // Stream completed
+                    break;
+                    
+                  case 'error':
+                    throw new Error(data.error || 'Stream error');
+                }
+              } catch {
+                // Skip invalid JSON lines
+              }
+            }
+          }
+        } finally {
+          reader.releaseLock();
+        }
+      } else {
+        // Fallback to non-streaming response
+        const data = await response.json();
+        
+        if (data.error) {
+          throw new Error(data.error);
+        }
+
+        setMessages(prev => 
+          prev.map(msg => 
+            msg.id === assistantMsgId 
+              ? { 
+                  ...msg, 
+                  content: data.text || '抱歉，没有收到回复。',
+                  resources: data.resources,
+                }
+              : msg
+          )
+        );
+      }
     } catch (err) {
       console.error('Chat error:', err);
       const errorMessage = handleChatError(err);
-      setMessages(prev => [...prev, {
-        id: Date.now().toString(),
-        role: 'assistant',
-        content: `抱歉，${errorMessage}。请稍后重试。`,
-      }]);
+      setMessages(prev => 
+        prev.map(msg => 
+          msg.id === assistantMsgId 
+            ? { ...msg, content: `抱歉，${errorMessage}。请稍后重试。` }
+            : msg
+        )
+      );
     } finally {
       setIsLoading(false);
     }

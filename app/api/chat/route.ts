@@ -16,6 +16,30 @@ import {
 } from '../../../lib/knowledge';
 
 // ============================================================================
+// SSE Helper Functions
+// ============================================================================
+
+/**
+ * Create SSE data string
+ */
+function createSSE(data: Record<string, unknown>): string {
+  return `data: ${JSON.stringify(data)}\n\n`;
+}
+
+/**
+ * Create SSE stream response
+ */
+function createStreamResponse(stream: ReadableStream): Response {
+  return new Response(stream, {
+    headers: {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
+    },
+  });
+}
+
+// ============================================================================
 // Configuration
 // ============================================================================
 
@@ -152,6 +176,85 @@ async function callOpenRouterWithRetry(
 }
 
 // ============================================================================
+// OpenRouter Streaming API Call
+// ============================================================================
+
+async function* streamOpenRouter(
+  apiKey: string,
+  messages: { role: 'system' | 'user'; content: string }[]
+): AsyncGenerator<string, void, unknown> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), CONFIG.openRouterTimeout);
+
+  try {
+    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+        'HTTP-Referer': process.env.APP_URL || 'https://yc-advisor-v2.vercel.app',
+        'X-Title': 'YC Advisor',
+      },
+      body: JSON.stringify({
+        model: 'anthropic/claude-3.5-haiku',
+        messages,
+        max_tokens: 1024,
+        temperature: 0.7,
+        stream: true, // Enable streaming
+      }),
+      signal: controller.signal,
+    });
+
+    clearTimeout(timeoutId);
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      throw new Error(`OpenRouter API error: ${response.status} - ${errorText}`);
+    }
+
+    const reader = response.body?.getReader();
+    if (!reader) {
+      throw new Error('No response body');
+    }
+
+    const decoder = new TextDecoder();
+    let buffer = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split('\n');
+      buffer = lines.pop() || '';
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith('data: ')) continue;
+
+        const data = trimmed.slice(6); // Remove 'data: ' prefix
+        
+        if (data === '[DONE]') {
+          return;
+        }
+
+        try {
+          const parsed = JSON.parse(data);
+          const delta = parsed.choices?.[0]?.delta?.content;
+          if (delta) {
+            yield delta;
+          }
+        } catch {
+          // Skip invalid JSON
+        }
+      }
+    }
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+// ============================================================================
 // Fallback Response Generator
 // ============================================================================
 
@@ -261,14 +364,14 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
 
 /**
  * POST /api/chat
- * Main chat endpoint with context retrieval
+ * Main chat endpoint with context retrieval and streaming support
  */
-export async function POST(request: NextRequest): Promise<NextResponse> {
+export async function POST(request: NextRequest): Promise<Response> {
   const startTime = Date.now();
   
   try {
     const body = await request.json();
-    const { message, options = {} } = body;
+    const { message, options = {}, stream = false } = body;
     
     if (!message || typeof message !== 'string') {
       throw new InvalidQueryError('Message is required');
@@ -330,7 +433,7 @@ export async function POST(request: NextRequest): Promise<NextResponse> {
           const resource = await kb.loadResource(meta.code);
           return {
             meta,
-            content: truncateContent(resource.content, 1500), // Reduced from 2000
+            content: truncateContent(resource.content, 1500),
           };
         } catch {
           return { meta, content: null };
@@ -375,7 +478,74 @@ ${citations}
       { role: 'user' as const, content: message },
     ];
 
-    // Call OpenRouter with retry and timeout
+    // If streaming is requested, use streaming response
+    if (stream) {
+      const resources = searchResult.resources.map(r => ({ code: r.code, title: r.title, author: r.author }));
+      
+      const streamResponse = new ReadableStream({
+        async start(controller) {
+          try {
+            // Send metadata first
+            controller.enqueue(
+              createSSE({
+                type: 'metadata',
+                resources,
+                totalFound: searchResult.total,
+              })
+            );
+
+            // Stream content from OpenRouter
+            let fullContent = '';
+            
+            try {
+              for await (const chunk of streamOpenRouter(apiKey, messages)) {
+                fullContent += chunk;
+                controller.enqueue(
+                  createSSE({
+                    type: 'content',
+                    chunk,
+                  })
+                );
+              }
+            } catch (streamError) {
+              console.error('[POST] Streaming error:', streamError);
+              // Send fallback content
+              const fallbackContent = generateFallbackResponse(message, resourcesWithContent);
+              controller.enqueue(
+                createSSE({
+                  type: 'content',
+                  chunk: fallbackContent,
+                  fallback: true,
+                })
+              );
+            }
+
+            // Send completion
+            const executionTime = Date.now() - startTime;
+            controller.enqueue(
+              createSSE({
+                type: 'done',
+                executionTimeMs: executionTime,
+              })
+            );
+          } catch (error) {
+            console.error('[POST] Stream error:', error);
+            controller.enqueue(
+              createSSE({
+                type: 'error',
+                error: error instanceof Error ? error.message : 'Stream error',
+              })
+            );
+          } finally {
+            controller.close();
+          }
+        },
+      });
+
+      return createStreamResponse(streamResponse);
+    }
+
+    // Non-streaming mode (original behavior)
     let responseContent: string;
     let usedFallback = false;
     
@@ -401,6 +571,21 @@ ${citations}
     });
     
   } catch (error) {
+    // For streaming requests, we need to return an error stream
+    if (request.headers.get('accept')?.includes('text/event-stream')) {
+      const errorStream = new ReadableStream({
+        start(controller) {
+          controller.enqueue(
+            createSSE({
+              type: 'error',
+              error: error instanceof Error ? error.message : 'Internal error',
+            })
+          );
+          controller.close();
+        },
+      });
+      return createStreamResponse(errorStream);
+    }
     return handleError(error);
   }
 }
@@ -552,6 +737,8 @@ function handleError(error: unknown): NextResponse {
   );
 }
 
+// ============================================================================
+// Types for Streaming
 // ============================================================================
 // Additional Endpoints (for /api/knowledge/*)
 // ============================================================================
