@@ -45,13 +45,12 @@ export async function POST(req: NextRequest) {
   try {
     const { message, history = [] } = await req.json();
 
-    // Debug: Log key existence (not the actual key)
-    console.log('OPENROUTER_API_KEY exists:', !!process.env.OPENROUTER_API_KEY);
-    console.log('OPENROUTER_API_KEY length:', process.env.OPENROUTER_API_KEY?.length);
-
-    if (!process.env.OPENROUTER_API_KEY) {
+    // 验证 API Key（更严格的验证）
+    const apiKey = process.env.OPENROUTER_API_KEY;
+    if (!apiKey || apiKey.length < 20) {
+      console.error('OPENROUTER_API_KEY not configured or invalid');
       return NextResponse.json(
-        { error: 'OPENROUTER_API_KEY not configured' },
+        { error: 'Service configuration error' },
         { status: 500 }
       );
     }
@@ -65,40 +64,61 @@ export async function POST(req: NextRequest) {
       { role: 'user' as const, content: message },
     ];
 
-    const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENROUTER_API_KEY}`,
-        'Content-Type': 'application/json',
-        'HTTP-Referer': 'https://yc-advisor-v2.vercel.app',
-        'X-Title': 'YC Advisor',
-      },
-      body: JSON.stringify({
-        model: 'anthropic/claude-3.5-sonnet',
-        messages,
-        max_tokens: 4096,
-      }),
-    });
+    // 添加请求超时控制
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 30000); // 30秒超时
 
-    if (!response.ok) {
-      const error = await response.text();
-      console.error('OpenRouter error status:', response.status);
-      console.error('OpenRouter error body:', error);
-      throw new Error(`OpenRouter API error: ${error}`);
+    try {
+      const response = await fetch('https://openrouter.ai/api/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+          'HTTP-Referer': process.env.APP_URL || 'http://localhost:3000',
+          'X-Title': 'YC Advisor',
+        },
+        body: JSON.stringify({
+          model: 'anthropic/claude-3.5-sonnet',
+          messages,
+          max_tokens: 4096,
+        }),
+        signal: controller.signal,
+      });
+
+      clearTimeout(timeoutId);
+
+      if (!response.ok) {
+        const error = await response.text();
+        console.error('OpenRouter error status:', response.status);
+        console.error('OpenRouter error body:', error);
+        throw new Error(`OpenRouter API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const content = data.choices?.[0]?.message?.content;
+      
+      if (!content) {
+        return NextResponse.json({ text: '抱歉，没有收到回复。' });
+      }
+
+      return NextResponse.json({ text: content });
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      throw fetchError;
     }
-
-    const data = await response.json();
-    const content = data.choices?.[0]?.message?.content;
-    
-    if (!content) {
-      return NextResponse.json({ text: '抱歉，没有收到回复。' });
-    }
-
-    return NextResponse.json({ text: content });
   } catch (error) {
     console.error('Chat API error:', error);
+    // 生产环境隐藏详细错误信息
+    const isDev = process.env.NODE_ENV === 'development';
+    const errorMessage = error instanceof Error && error.name === 'AbortError'
+      ? '请求超时，请稍后重试'
+      : 'Internal server error';
+    
     return NextResponse.json(
-      { error: 'Internal server error', details: String(error) },
+      { 
+        error: errorMessage,
+        details: isDev && error instanceof Error ? error.message : undefined 
+      },
       { status: 500 }
     );
   }

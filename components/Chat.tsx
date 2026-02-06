@@ -98,7 +98,8 @@ export default function Chat() {
         content: data.text || '抱歉，没有收到回复。',
       };
       setMessages(prev => [...prev, assistantMsg]);
-    } catch {
+    } catch (err) {
+      console.error('Chat error:', err);
       setMessages(prev => [...prev, {
         id: Date.now().toString(),
         role: 'assistant',
@@ -133,15 +134,18 @@ export default function Chat() {
       await navigator.clipboard.writeText(content);
       setCopiedId(id);
       setTimeout(() => setCopiedId(null), 2000);
-    } catch {
-      // ignore
+    } catch (err) {
+      console.error('Failed to copy message:', err);
     }
   };
 
   const regenerate = () => {
-    const lastUser = [...messages].reverse().find(m => m.role === 'user');
-    if (lastUser) {
-      setMessages(prev => prev.slice(0, -1));
+    // 找到最后一条用户消息的索引
+    const lastUserIndex = messages.length - 1 - [...messages].reverse().findIndex(m => m.role === 'user');
+    if (lastUserIndex >= 0) {
+      const lastUser = messages[lastUserIndex];
+      // 删除该用户消息之后的所有消息（通常是助手回复）
+      setMessages(prev => prev.slice(0, lastUserIndex + 1));
       sendMessage(lastUser.content);
     }
   };
@@ -248,22 +252,31 @@ export default function Chat() {
                   {msg.role === 'user' ? (
                     <p className="whitespace-pre-wrap text-white">{msg.content}</p>
                   ) : (
-                    <div className="prose prose-sm max-w-none text-gray-800">
+                    <div className="max-w-none text-gray-800">
                       <ReactMarkdown 
                         remarkPlugins={[remarkGfm]}
+                        className="markdown-content"
                         components={{
-                          h1: ({children}) => <h1 className="text-xl font-bold text-gray-900 mt-4 mb-2">{children}</h1>,
-                          h2: ({children}) => <h2 className="text-lg font-semibold text-gray-800 mt-3 mb-2">{children}</h2>,
-                          h3: ({children}) => <h3 className="text-base font-medium text-gray-800 mt-2 mb-1">{children}</h3>,
-                          strong: ({children}) => <strong className="font-semibold text-gray-900">{children}</strong>,
-                          code: ({children}) => <code className="bg-gray-200 px-1 py-0.5 rounded text-sm text-orange-700">{children}</code>,
-                          pre: ({children}) => <pre className="bg-gray-800 text-gray-100 p-3 rounded-lg overflow-x-auto my-2 text-sm">{children}</pre>,
-                          ul: ({children}) => <ul className="list-disc pl-5 my-2 space-y-1">{children}</ul>,
-                          ol: ({children}) => <ol className="list-decimal pl-5 my-2 space-y-1">{children}</ol>,
-                          li: ({children}) => <li className="text-gray-700">{children}</li>,
-                          p: ({children}) => <p className="mb-2 text-gray-700 leading-relaxed">{children}</p>,
-                          blockquote: ({children}) => <blockquote className="border-l-4 border-orange-300 pl-4 italic text-gray-600 my-2">{children}</blockquote>,
-                          a: ({href, children}) => <a href={href} className="text-orange-600 hover:underline" target="_blank" rel="noopener noreferrer">{children}</a>,
+                          h1: ({children}) => <h1 className="text-xl font-bold text-gray-900 mt-6 mb-3 border-b border-gray-200 pb-2">{children}</h1>,
+                          h2: ({children}) => <h2 className="text-lg font-semibold text-gray-800 mt-5 mb-3">{children}</h2>,
+                          h3: ({children}) => <h3 className="text-base font-semibold text-gray-800 mt-4 mb-2">{children}</h3>,
+                          strong: ({children}) => <strong className="font-bold text-gray-900">{children}</strong>,
+                          code: ({children, className}) => {
+                            const isInline = !className;
+                            return isInline ? (
+                              <code className="bg-orange-50 text-orange-700 px-1.5 py-0.5 rounded text-sm font-mono border border-orange-200">{children}</code>
+                            ) : (
+                              <code className="text-sm font-mono">{children}</code>
+                            );
+                          },
+                          pre: ({children}) => <pre className="bg-gray-900 text-gray-100 p-4 rounded-lg overflow-x-auto my-3 text-sm font-mono">{children}</pre>,
+                          ul: ({children}) => <ul className="list-disc pl-6 my-3 space-y-2">{children}</ul>,
+                          ol: ({children}) => <ol className="list-decimal pl-6 my-3 space-y-2" style={{ listStyleType: 'decimal' }}>{children}</ol>,
+                          li: ({children}) => <li className="text-gray-700 leading-relaxed">{children}</li>,
+                          p: ({children}) => <p className="mb-3 text-gray-700 leading-relaxed">{children}</p>,
+                          blockquote: ({children}) => <blockquote className="border-l-4 border-orange-400 pl-4 py-1 italic text-gray-600 my-3 bg-orange-50 rounded-r">{children}</blockquote>,
+                          a: ({href, children}) => <a href={href} className="text-orange-600 hover:text-orange-700 hover:underline font-medium" target="_blank" rel="noopener noreferrer">{children}</a>,
+                          hr: () => <hr className="my-4 border-gray-200" />,
                         }}
                       >
                         {msg.content}

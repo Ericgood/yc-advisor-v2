@@ -25,3 +25,28 @@ body {
     text-wrap: balance;
   }
 }
+
+/* Markdown 列表样式修复 */
+.markdown-content ol {
+  counter-reset: item;
+  list-style-type: decimal;
+}
+
+.markdown-content ol > li {
+  counter-increment: item;
+  display: list-item;
+}
+
+.markdown-content ol > li::marker {
+  font-weight: 600;
+  color: #f97316;
+}
+
+.markdown-content ul > li::marker {
+  color: #f97316;
+}
+
+/* 防止 prose 样式覆盖 */
+.markdown-content .prose ol {
+  list-style-type: decimal !important;
+}
