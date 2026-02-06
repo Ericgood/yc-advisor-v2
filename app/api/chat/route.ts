@@ -392,8 +392,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           title: r.title,
           author: r.author,
           type: r.type,
-          lines: r.lines,
-          stage: r.stage,
         })),
         query,
       });
@@ -406,8 +404,6 @@ export async function GET(request: NextRequest): Promise<NextResponse> {
           title: r.title,
           author: r.author,
           type: r.type,
-          lines: r.lines,
-          stage: r.stage,
         })),
         total: allResources.length,
       });
