@@ -4,6 +4,7 @@
 
 export * from './types';
 export * from './knowledge-base';
+export * from './skill-knowledge';
 export * from './search';
 
 // Re-export commonly used types
@@ -12,6 +13,13 @@ export {
   getKnowledgeBase,
   resetKnowledgeBase,
 } from './knowledge-base';
+
+export {
+  YCSkillKnowledge,
+  getYCSkillKnowledge,
+  type SkillResource,
+  type SkillContent,
+} from './skill-knowledge';
 
 export {
   SearchUtils,

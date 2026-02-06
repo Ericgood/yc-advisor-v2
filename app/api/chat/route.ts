@@ -1,19 +1,10 @@
 /**
- * Chat API Route
- * Handles knowledge base queries with streaming support
+ * Chat API Route - YC Advisor Skill Implementation
+ * Implements the proper 3-step workflow from SKILL.md
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  KnowledgeBase,
-  getKnowledgeBase,
-  SearchQuery,
-  ResourceMeta,
-  ApiSearchRequest,
-  ApiSearchResponse,
-  InvalidQueryError,
-  ResourceNotFoundError,
-} from '../../../lib/knowledge';
+import { getYCSkillKnowledge, SkillContent } from '../../../lib/knowledge';
 
 // ============================================================================
 // SSE Helper Functions
@@ -38,64 +29,20 @@ function createStreamResponse(stream: ReadableStream): Response {
 // ============================================================================
 
 const CONFIG = {
-  defaultLimit: 10,
-  maxLimit: 50,
-  defaultSearchTimeout: 5000,
-  openRouterTimeout: 25000,
-  kbInitTimeout: 5000,
-  maxRetries: 1,
+  maxDiscoveryResults: 5,
+  maxDeepDiveResources: 3,
+  openRouterTimeout: 30000,
 };
-
-// ============================================================================
-// Knowledge Base Singleton
-// ============================================================================
-
-let kbInstance: KnowledgeBase | null = null;
-let kbInitializing: Promise<KnowledgeBase> | null = null;
-
-async function getKB(): Promise<KnowledgeBase> {
-  if (kbInstance) {
-    return kbInstance;
-  }
-
-  if (kbInitializing) {
-    return kbInitializing;
-  }
-
-  kbInitializing = (async () => {
-    try {
-      kbInstance = getKnowledgeBase({
-        indexPath: process.env.KNOWLEDGE_INDEX_PATH || 'data/knowledge-index.json',
-        contentPath: process.env.KNOWLEDGE_CONTENT_PATH || 'references',
-        cacheSize: 100,
-        cacheTtl: 5 * 60 * 1000,
-      });
-
-      const initPromise = kbInstance.initialize();
-      const timeoutPromise = new Promise<never>((_, reject) => 
-        setTimeout(() => reject(new Error('Knowledge base initialization timeout')), CONFIG.kbInitTimeout)
-      );
-
-      await Promise.race([initPromise, timeoutPromise]);
-      console.log('[getKB] Knowledge base initialized successfully');
-      return kbInstance;
-    } catch (error) {
-      console.error('[getKB] Failed to initialize knowledge base:', error);
-      kbInstance = null;
-      throw error;
-    } finally {
-      kbInitializing = null;
-    }
-  })();
-
-  return kbInitializing;
-}
 
 // ============================================================================
 // OpenRouter Streaming
 // ============================================================================
 
-async function* streamOpenRouter(apiKey: string, messages: Array<{role: string; content: string}>): AsyncGenerator<string> {
+async function* streamOpenRouter(
+  apiKey: string, 
+  messages: Array<{role: string; content: string}>,
+  model: string = 'anthropic/claude-sonnet-4.5'
+): AsyncGenerator<string> {
   const controller = new AbortController();
   const timeoutId = setTimeout(() => controller.abort(), CONFIG.openRouterTimeout);
 
@@ -109,9 +56,9 @@ async function* streamOpenRouter(apiKey: string, messages: Array<{role: string; 
         'X-Title': 'YC Advisor',
       },
       body: JSON.stringify({
-        model: 'anthropic/claude-sonnet-4.5',
+        model,
         messages,
-        max_tokens: 2048,
+        max_tokens: 4096,
         temperature: 0.7,
         stream: true,
       }),
@@ -168,32 +115,49 @@ async function* streamOpenRouter(apiKey: string, messages: Array<{role: string; 
 }
 
 // ============================================================================
-// Fallback Response Generator
+// System Prompt Builder
 // ============================================================================
 
-function generateFallbackResponse(query: string, resources: { meta: ResourceMeta; content: string | null }[]): string {
-  const relevantResources = resources.filter(r => r.content).slice(0, 3);
-  
-  if (relevantResources.length === 0) {
-    return `抱歉，我暂时无法连接到 AI 服务。不过我可以建议你查看 YC 的官方资源库来获取关于"${query}"的信息。`;
-  }
+function buildSystemPrompt(resources: SkillContent[]): string {
+  // Build citations
+  const citations = resources
+    .map(r => `- **${r.meta.title}** by ${r.meta.author} (${r.meta.code})`)
+    .join('\n');
 
-  let response = `抱歉，AI 服务暂时响应较慢。基于知识库，我为你找到了以下相关资源：\n\n`;
-  
-  relevantResources.forEach((r, i) => {
-    response += `${i + 1}. **${r.meta.title}** - ${r.meta.author}\n`;
-    if (r.content) {
-      const summary = r.content.slice(0, 300).replace(/[#*_]/g, '').trim();
-      response += `   ${summary}...\n\n`;
-    }
-  });
+  // Build full context from resources
+  const contexts = resources
+    .map(r => `---\n## ${r.meta.title}\n**Author:** ${r.meta.author}\n**Type:** ${r.meta.type}\n**Code:** ${r.meta.code}\n\n${r.content.slice(0, 8000)}\n---`)
+    .join('\n\n');
 
-  response += `\n你可以点击参考资料链接查看完整内容。`;
-  return response;
+  return `你是 **YC Advisor**，一位经验丰富的 Y Combinator 合伙人。
+
+## 你的背景
+- 你在 Y Combinator 工作了多年，看过数千家创业公司
+- 你熟悉 Paul Graham、Sam Altman、Dalton Caldwell 等 YC 合伙人的理念
+- 你基于 Y Combinator 的 443+ 个精选资源提供建议
+
+## 回答风格
+- **直接、实用、不废话**：YC 风格就是直截了当
+- **具体可操作**：给出明确的下一步行动
+- **引用具体案例**：用真实的 YC 公司作为例子
+- **诚实务实**：如果某个想法不好，直接说
+
+## 引用规范（必须遵守）
+- **每个观点都要标注来源**：使用 "[作者名 - 文章标题]" 格式
+- **基于提供的参考资料回答**：不要编造信息
+- **最后列出参考来源**：使用 "## 参考资料" 标题
+
+## 本次回答可用的参考资料
+${citations}
+
+## 参考资料详细内容（基于这些内容回答）
+${contexts}
+
+重要：你的回答必须基于上面提供的参考资料内容。每个观点都要标注来源。`;
 }
 
 // ============================================================================
-// POST Handler
+// POST Handler - YC Skill 3-Step Workflow
 // ============================================================================
 
 export async function POST(req: NextRequest) {
@@ -216,105 +180,80 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Get knowledge base
-    let kb: KnowledgeBase;
-    try {
-      kb = await getKB();
-    } catch (kbError) {
-      console.error('[POST] Knowledge base initialization failed:', kbError);
-      return NextResponse.json(
-        { error: 'Service temporarily unavailable', code: 'SERVICE_UNAVAILABLE' },
-        { status: 503 }
-      );
+    // ========================================================================
+    // Step 1: Discovery - Find relevant resources from quick-index
+    // ========================================================================
+    console.log('[POST] === Step 1: Discovery ===');
+    const skillKB = getYCSkillKnowledge();
+    await skillKB.initialize();
+
+    const discoveredResources = await skillKB.discover(
+      message, 
+      CONFIG.maxDiscoveryResults
+    );
+
+    if (discoveredResources.length === 0) {
+      return NextResponse.json({
+        text: '抱歉，我在知识库中没有找到与你问题相关的资源。请尝试用不同的方式描述你的问题。',
+        resources: [],
+      });
     }
 
-    // Search knowledge base
-    const searchQuery: SearchQuery = {
-      keywords: message.split(/\s+/).filter(Boolean),
-      rawQuery: message,
-      limit: 5,
-      semantic: true,
-    };
+    // ========================================================================
+    // Step 2: Deep Dive - Load full content of top resources
+    // ========================================================================
+    console.log('[POST] === Step 2: Deep Dive ===');
+    const topCodes = discoveredResources
+      .slice(0, CONFIG.maxDeepDiveResources)
+      .map(r => r.code);
 
-    const searchResult = await kb.search(searchQuery);
+    const loadedContents = await skillKB.loadResources(topCodes);
 
-    // Load full content of top resources
-    console.log('[POST] Search found resources:', searchResult.resources.map(r => ({ code: r.code, title: r.title, score: r.score })));
+    if (loadedContents.length === 0) {
+      return NextResponse.json({
+        text: '抱歉，找到了相关资源但无法加载内容。请稍后重试。',
+        resources: discoveredResources.map(r => ({ 
+          code: r.code, 
+          title: r.title, 
+          author: r.author 
+        })),
+      });
+    }
+
+    console.log(`[POST] Loaded ${loadedContents.length} resources with full content`);
+
+    // ========================================================================
+    // Step 3: Synthesize - Generate answer with proper citations
+    // ========================================================================
+    console.log('[POST] === Step 3: Synthesize ===');
+
+    const systemPrompt = buildSystemPrompt(loadedContents);
     
-    const resourcesWithContent = await Promise.all(
-      searchResult.resources.slice(0, 3).map(async (resource) => {
-        try {
-          console.log(`[POST] Loading content for ${resource.code}...`);
-          const loadedResource = await kb.loadResource(resource.code);
-          const content = loadedResource.content;
-          const contentLength = content?.length || 0;
-          console.log(`[POST] Loaded ${resource.code}: ${contentLength} chars`);
-          return { meta: resource, content };
-        } catch (error) {
-          console.warn(`[POST] Failed to load content for ${resource.code}:`, error);
-          return { meta: resource, content: null };
-        }
-      })
-    );
-    
-    console.log('[POST] Resources with content:', resourcesWithContent.map(r => ({ code: r.meta.code, hasContent: !!r.content, length: r.content?.length })));
-
-    // Build context from loaded content
-    const contextContent = resourcesWithContent
-      .filter(r => r.content)
-      .map(r => `---\n**${r.meta.title}** by ${r.meta.author}\n\n${r.content?.slice(0, 2000)}\n---`)
-      .join('\n\n');
-
-    const citations = resourcesWithContent
-      .filter(r => r.content)
-      .map(r => `- **${r.meta.title}** by ${r.meta.author} (${r.meta.code})`)
-      .join('\n');
-
-    // Build system prompt with full context
-    const SYSTEM_PROMPT = `你是 **YC Advisor**，一位经验丰富的 Y Combinator 合伙人。
-
-## 你的背景
-- 你在 Y Combinator 工作了多年，看过数千家创业公司
-- 你熟悉 Paul Graham、Sam Altman、Dalton Caldwell 等 YC 合伙人的理念
-- 你基于 Y Combinator 的 443+ 个精选资源提供建议
-
-## 回答风格
-- **直接、实用、不废话**：YC 风格就是直截了当
-- **具体可操作**：给出明确的下一步行动
-- **引用具体案例**：用真实的 YC 公司作为例子
-- **诚实务实**：如果某个想法不好，直接说
-
-## 引用规范（必须遵守）
-- **每个观点都要标注来源**：使用 "[作者名 - 文章标题]" 格式
-- **最后列出参考来源**：使用 "## 参考资料" 标题
-
-## 可用的参考资料
-${citations}
-
-## 参考资料详细内容（基于这些内容回答）
-${contextContent}
-
-重要：你的回答必须基于上面提供的参考资料内容。如果用户的问题不在参考资料范围内，请坦诚说明。记住：每个观点都要标注来源，最后列出参考资料。`;
-
     const messages = [
-      { role: 'system' as const, content: SYSTEM_PROMPT },
-      ...history.slice(-4).map((h: {role: string; content: string}) => ({ role: h.role as 'user' | 'assistant', content: h.content })),
+      { role: 'system' as const, content: systemPrompt },
+      ...history.slice(-4).map((h: {role: string; content: string}) => ({ 
+        role: h.role as 'user' | 'assistant', 
+        content: h.content 
+      })),
       { role: 'user' as const, content: message },
     ];
 
     // If streaming is requested, use streaming response
     if (stream) {
-      const resources = searchResult.resources.map(r => ({ code: r.code, title: r.title, author: r.author }));
-      
       const streamResponse = new ReadableStream({
         async start(controller) {
           try {
-            // Send metadata first
+            // Send metadata with discovered resources
             controller.enqueue(
               createSSE({
                 type: 'metadata',
-                resources,
-                totalFound: searchResult.total,
+                resources: loadedContents.map(c => ({
+                  code: c.meta.code,
+                  title: c.meta.title,
+                  author: c.meta.author,
+                  type: c.meta.type,
+                })),
+                totalFound: discoveredResources.length,
               })
             );
 
@@ -333,13 +272,10 @@ ${contextContent}
               }
             } catch (streamError) {
               console.error('[POST] Streaming error:', streamError);
-              // Send fallback content
-              const fallbackContent = generateFallbackResponse(message, resourcesWithContent);
               controller.enqueue(
                 createSSE({
-                  type: 'content',
-                  chunk: fallbackContent,
-                  fallback: true,
+                  type: 'error',
+                  error: 'Stream interrupted',
                 })
               );
             }
@@ -350,7 +286,7 @@ ${contextContent}
               createSSE({
                 type: 'done',
                 executionTime,
-                totalTokens: fullContent.length / 4, // Rough estimate
+                totalTokens: fullContent.length / 4,
               })
             );
             controller.close();
@@ -382,7 +318,7 @@ ${contextContent}
       body: JSON.stringify({
         model: 'anthropic/claude-sonnet-4.5',
         messages,
-        max_tokens: 2048,
+        max_tokens: 4096,
         temperature: 0.7,
       }),
     });
@@ -401,7 +337,11 @@ ${contextContent}
 
     return NextResponse.json({ 
       text: content,
-      resources: searchResult.resources.map(r => ({ code: r.code, title: r.title, author: r.author })),
+      resources: loadedContents.map(c => ({ 
+        code: c.meta.code, 
+        title: c.meta.title, 
+        author: c.meta.author 
+      })),
     });
 
   } catch (error) {
@@ -422,92 +362,51 @@ ${contextContent}
 }
 
 // ============================================================================
-// GET Handler (Search)
+// GET Handler - List available resources
 // ============================================================================
 
 export async function GET(request: NextRequest): Promise<NextResponse> {
   try {
     const { searchParams } = new URL(request.url);
+    const query = searchParams.get('q') || '';
     
-    const params: ApiSearchRequest = {
-      q: searchParams.get('q') || '',
-      category: (searchParams.get('category') as any) || undefined,
-      stage: (searchParams.get('stage') as any) || undefined,
-      author: searchParams.get('author') || undefined,
-      type: (searchParams.get('type') as any) || undefined,
-      semantic: searchParams.get('semantic') === 'true',
-      limit: parseInt(searchParams.get('limit') || '10', 10),
-      offset: parseInt(searchParams.get('offset') || '0', 10),
-    };
-    
-    if (!params.q || params.q.trim().length < 2) {
-      throw new InvalidQueryError('Query must be at least 2 characters');
+    const skillKB = getYCSkillKnowledge();
+    await skillKB.initialize();
+
+    if (query) {
+      // Search resources
+      const resources = await skillKB.discover(query, 10);
+      return NextResponse.json({
+        resources: resources.map(r => ({
+          code: r.code,
+          title: r.title,
+          author: r.author,
+          type: r.type,
+          lines: r.lines,
+          stage: r.stage,
+        })),
+        query,
+      });
+    } else {
+      // List all resources
+      const allResources = skillKB.getAllResources();
+      return NextResponse.json({
+        resources: allResources.map(r => ({
+          code: r.code,
+          title: r.title,
+          author: r.author,
+          type: r.type,
+          lines: r.lines,
+          stage: r.stage,
+        })),
+        total: allResources.length,
+      });
     }
-    
-    const limit = Math.min(params.limit || CONFIG.defaultLimit, CONFIG.maxLimit);
-    const offset = params.offset || 0;
-    
-    let kb: KnowledgeBase;
-    try {
-      kb = await getKB();
-    } catch (kbError) {
-      console.error('[GET] Knowledge base initialization failed:', kbError);
-      return NextResponse.json(
-        { error: 'Service temporarily unavailable', code: 'SERVICE_UNAVAILABLE' },
-        { status: 503 }
-      );
-    }
-    
-    const searchQuery: SearchQuery = {
-      keywords: params.q.split(/\s+/).filter(Boolean),
-      rawQuery: params.q,
-      filters: {
-        categories: params.category ? [params.category] : undefined,
-        stages: params.stage ? [params.stage] : undefined,
-        authors: params.author ? [params.author] : undefined,
-        types: params.type ? [params.type] : undefined,
-      },
-      semantic: params.semantic,
-      limit,
-      offset,
-    };
-    
-    const searchPromise = kb.search(searchQuery);
-    const timeoutPromise = new Promise<never>((_, reject) => 
-      setTimeout(() => reject(new Error('Search timeout')), CONFIG.defaultSearchTimeout)
-    );
-    
-    const result = await Promise.race([searchPromise, timeoutPromise]);
-    
-    const response: ApiSearchResponse = {
-      results: result.resources.map(r => ({
-        code: r.code,
-        title: r.title,
-        author: r.author,
-        type: r.type,
-        categories: r.categories,
-        url: `https://www.ycombinator.com/library/${r.code}`,
-      })),
-      total: result.total,
-      limit,
-      offset,
-      query: params.q,
-    };
-    
-    return NextResponse.json(response);
     
   } catch (error) {
-    console.error('[GET] Search error:', error);
-    
-    if (error instanceof InvalidQueryError) {
-      return NextResponse.json(
-        { error: error.message, code: 'INVALID_QUERY' },
-        { status: 400 }
-      );
-    }
-    
+    console.error('[GET] Error:', error);
     return NextResponse.json(
-      { error: 'Search failed', code: 'SEARCH_ERROR' },
+      { error: 'Failed to load resources' },
       { status: 500 }
     );
   }
