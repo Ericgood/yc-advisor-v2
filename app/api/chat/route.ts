@@ -6,6 +6,9 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getYCSkillKnowledge, SkillContent } from '../../../lib/knowledge';
 
+// Force Node.js runtime (not Edge) for better compatibility
+export const runtime = 'nodejs';
+
 // ============================================================================
 // SSE Helper Functions
 // ============================================================================

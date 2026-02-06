@@ -4,7 +4,7 @@
 
 export * from './types';
 export * from './knowledge-base';
-export * from './skill-knowledge';
+export * from './skill-knowledge-simple';
 export * from './search';
 
 // Re-export commonly used types
@@ -14,12 +14,12 @@ export {
   resetKnowledgeBase,
 } from './knowledge-base';
 
+// Use simplified version that works on Vercel
 export {
   YCSkillKnowledge,
   getYCSkillKnowledge,
-  type SkillResource,
   type SkillContent,
-} from './skill-knowledge';
+} from './skill-knowledge-simple';
 
 export {
   SearchUtils,
