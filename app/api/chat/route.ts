@@ -109,7 +109,7 @@ async function* streamOpenRouter(apiKey: string, messages: Array<{role: string; 
         'X-Title': 'YC Advisor',
       },
       body: JSON.stringify({
-        model: 'anthropic/claude-3.5-sonnet',
+        model: 'anthropic/claude-sonnet-4.5',
         messages,
         max_tokens: 2048,
         temperature: 0.7,
@@ -380,7 +380,7 @@ ${contextContent}
         'X-Title': 'YC Advisor',
       },
       body: JSON.stringify({
-        model: 'anthropic/claude-3.5-sonnet',
+        model: 'anthropic/claude-sonnet-4.5',
         messages,
         max_tokens: 2048,
         temperature: 0.7,
