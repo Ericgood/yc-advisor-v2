@@ -3,7 +3,7 @@
  * Uses bundled core articles - no file system access needed
  */
 
-import { startupIdeasArticles, articleMap, findRelevantArticles, CoreArticle } from '../../data/core-knowledge';
+import { startupIdeasArticles, articleMap, findRelevantArticles } from '../../data/core-knowledge';
 
 export interface SkillContent {
   meta: {
